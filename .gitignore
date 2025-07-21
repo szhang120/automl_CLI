@@ -1,3 +1,4 @@
+# --- Python ---
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -6,7 +7,21 @@ __pycache__/
 # C extensions
 *.so
 
-# Distribution / packaging
+# --- Project-Specific ---
+# SQLite Database and Journals
+*.db
+*.db-journal
+
+# --- Virtual Environments ---
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Distribution / Packaging ---
 .Python
 build/
 develop-eggs/
@@ -27,15 +42,15 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
+# --- Logs ---
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
 
+# --- Testing / Coverage ---
 # Unit test / coverage reports
 htmlcov/
 .tox/
@@ -51,15 +66,7 @@ coverage.xml
 .pytest_cache/
 cover/
 
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
+# --- IDEs / Editors ---
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -67,9 +74,14 @@ venv.bak/
 # Rope project settings
 .ropeproject
 
+# VS Code
+.vscode/
+
+# --- Documentation ---
 # mkdocs documentation
 /site
 
+# --- Type Checkers ---
 # mypy
 .mypy_cache/
 .dmypy.json
@@ -82,4 +94,7 @@ dmypy.json
 .pytype/
 
 # Cython debug symbols
-cython_debug/ 
+cython_debug/
+
+# --- macOS ---
+.DS_Store 

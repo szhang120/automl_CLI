@@ -12,22 +12,33 @@ A powerful, command-line to-do list application for detailed life and task track
 - **Post-Completion Updates:** Update tasks with actual difficulty and your takeaways after completion.
 - **Local SQLite Database:** All data is stored in a local `tasks.db` file.
 - **Rich Terminal Output:** Clean, readable tables for viewing tasks and logs.
+- **Backup and Restore:** Export all your data to a JSON file and import it back, allowing for data preservation even after schema changes.
 
 ## Data Storage
 
-The application uses a local SQLite database named `tasks.db` to store all data. A single table, `tasks`, is used with the following schema:
+The application uses a local SQLite database named `tasks.db`. It contains two main tables:
 
+### `seasons` Schema
+- `id`: (Integer) The unique ID of the season.
+- `name`: (String) The name of the season (e.g., "Summer 2025").
+- `start_date`: (DateTime) The timestamp when the season was started.
+- `end_date`: (DateTime) The timestamp when the season was archived.
+- `is_active`: (Boolean) A flag to mark the current season.
+- `daily_decay`: (Float) The daily LP decay value for the season (default: 30.0).
+
+### `tasks` Schema
 - `id`: (Integer) The unique ID of the task.
-- `assignment`: (String) The description of the task.
-- `course`: (String) The course or category for the task.
-- `expected_difficulty`: (String) The initial estimated difficulty.
-- `actual_difficulty`: (String) The actual difficulty, set after completion.
+- `dow`: (String) The Day of Week for the task.
+- `task`: (String) The description of the task.
+- `project`: (String) The project or category for the task.
+- `difficulty`: (String) The difficulty of the task.
 - `start_time`: (DateTime) The timestamp when the task was started.
 - `finish_time`: (DateTime) The timestamp when the task was stopped or completed.
 - `lp_gain`: (Float) The "Life Points" gained from the task.
-- `takeaways`: (String) Notes or takeaways from the task.
+- `reflection`: (String) Your notes or reflection on the task.
 - `completed`: (Boolean) Whether the task is complete.
 - `created_at`: (DateTime) The timestamp when the task was created.
+- `season_id`: (Integer) A link to the `seasons` table.
 
 ## Setup
 
@@ -38,37 +49,124 @@ The application uses a local SQLite database named `tasks.db` to store all data.
     source venv/bin/activate
     ```
 
-2.  **Install dependencies and the CLI command:**
-    This command reads the `pyproject.toml` file, installs all required libraries, and creates the `todo` command-line tool within your virtual environment.
+2.  **Install dependencies:**
 
     ```bash
-    pip install -e .
+    pip install -r requirements.txt
     ```
 
 3.  **Initialize the database:**
     This command creates the `tasks.db` file in your project directory with the correct schema. You only need to run this once.
 
     ```bash
-    todo init
+    python -m todo init
     ```
 
 ## Usage
 
-Once installed, all commands are run using the `todo` executable from your terminal (as long as your virtual environment is active).
+The application is organized into two main groups of commands: task management commands (like `add`, `list`, `log`) and season management commands (under the `season` subcommand). All commands operate on the currently **active season**.
+
+---
+### Season Management (`todo season`)
+
+This set of commands allows you to archive your tasks and start fresh for a new period in your life (e.g., a new semester, a work sprint, etc.).
+
+#### `season start <NAME>`
+
+Archives the current season and starts a new one. This gives you a fresh, empty task list and log.
+
+- **Usage:** `todo season start <NAME>`
+- **Example:**
+    ```bash
+    todo season start "Fall Quarter 2025"
+    ```
+
+#### `season list`
+
+Displays all your seasons, showing which one is currently active.
+
+- **Usage:** `todo season list`
+
+#### `season switch <SEASON_ID>`
+
+Switches the active season. All subsequent commands will operate on the tasks within this newly activated season.
+
+- **Usage:** `todo season switch <SEASON_ID>`
+- **Example:**
+    ```bash
+    todo season switch 1
+    ```
+
+#### `season set-decay <VALUE>`
+
+Sets the daily LP decay for the current active season.
+
+- **Usage:** `todo season set-decay <VALUE>`
+- **Example:**
+    ```bash
+    todo season set-decay 15.5
+    ```
+
+#### `season current`
+
+Shows the name of the currently active season.
+
+- **Usage:** `todo season current`
+
+---
+### Backup and Restore (`todo backup`)
+
+This set of commands allows you to export your data to a safe format and import it back into the application. This is crucial for preserving your data if future versions of the app require database changes.
+
+#### `backup export [FILENAME]`
+
+Exports all seasons and tasks to a JSON file.
+
+- **Usage:** `todo backup export [FILENAME]`
+- **Default Filename:** If you don't provide a filename, it defaults to `backup.json`.
+- **Example:**
+    ```bash
+    todo backup export my_life_backup.json
+    ```
+
+#### `backup import [FILENAME]`
+
+Imports data from a JSON backup file. This is a **destructive operation** and will completely overwrite your current database.
+
+- **Usage:** `todo backup import [FILENAME] [OPTIONS]`
+- **Default Filename:** If you don't provide a filename, it defaults to `backup.json`.
+- **Options:**
+    - `--yes` or `-y`: Bypasses the confirmation prompt, which is useful for scripting.
+- **Example:**
+    ```bash
+    todo backup import my_life_backup.json --yes
+    ```
+
+---
+
+### Task Management
+
+These commands manage the tasks within the currently active season.
 
 ---
 
 ### `add`
 
-Adds a new task to the list.
+Adds a new task. By default, tasks are added to the active list, but they can be logged as completed immediately.
 
-- **Usage:** `todo add <ASSIGNMENT>`
+- **Usage:** `todo add <TASK> [OPTIONS]`
 - **Options:**
-    - `--course` or `-c`: Specify the course or category.
-    - `--difficulty` or `-d`: Set the expected difficulty.
-- **Example:**
+    - `--project` or `-p`: Specify the project or category.
+    - `--difficulty` or `-d`: Set the difficulty.
+    - `--dow`: Set the Day of Week. You can use a number (`0` for Sunday) or a string (`"Sun"`, `"Monday"`).
+    - `--completed` or `-C`: A flag to log a task as already completed. This bypasses the need for `start` and `done`.
+- **Example (adding a new active task):**
     ```bash
-    todo add "Implement the new feature" -c "Work" -d "Hard"
+    todo add "Work on the final report" -p "Academics" -d "Hard" --dow 0
+    ```
+- **Example (logging a task after-the-fact):**
+    ```bash
+    todo add "Read chapter 5" -p "Books" --completed
     ```
 
 ---
@@ -78,7 +176,7 @@ Adds a new task to the list.
 Displays all active (incomplete) tasks.
 
 - **Usage:** `todo list`
-- **Output:** A table showing the `ID`, `Course`, `Assignment`, `Expected Difficulty`, and `Status` (`In Progress` or `Not Started`).
+- **Output:** A table showing the `ID`, `Project`, `Task`, `Difficulty`, and `Status` (`In Progress` or `Not Started`).
 
 ---
 
@@ -108,7 +206,7 @@ Marks the end of work on a task. Sets the `finish_time`.
 
 ### `done`
 
-Marks a task as complete. If the task has no `finish_time`, it will be set to the current time.
+Marks a task as complete, sets the `finish_time` if it isn't already set, and **calculates `lp_gain`** based on the task's difficulty.
 
 - **Usage:** `todo done <TASK_ID>`
 - **Example:**
@@ -120,35 +218,47 @@ Marks a task as complete. If the task has no `finish_time`, it will be set to th
 
 ### `update`
 
-Updates a task with its actual difficulty and any takeaways. This command also calculates the `LP Gain`.
+Updates any attribute of a task, whether it is active or complete.
 
-- **Usage:** `todo update <TASK_ID>`
+- **Usage:** `todo update <TASK_ID> [OPTIONS]`
 - **Options:**
-    - `--difficulty` or `-d`: Set the actual difficulty (`Easy`, `Medium`, `Hard`).
-    - `--takeaways` or `-t`: Add notes or takeaways.
-- **LP Calculation:** `lp_gain` is calculated based on the `actual_difficulty`:
-    - `Easy`: 2.5 LP
-    - `Medium`: 5 LP
-    - `Hard`: 10 LP
-- **Example:**
+    - `--task` or `-t`: Change the main description of the task.
+    - `--project` or `-p`: Change the project or category.
+    - `--difficulty` or `-d`: Change the difficulty. If the task is already complete, this will also **recalculate the `lp_gain`**.
+    - `--dow`: Change the Day of Week. You can provide a number (0-6, Sunday-Saturday) which will be stored as an abbreviation (e.g., 'Sun'), or provide a string which will be stored as-is.
+    - `--duration`: Manually set the time taken in minutes for a task.
+    - `--reflection` or `-r`: Add or change your reflection on the task.
+- **LP Calculation:** `lp_gain` is calculated whenever a task with a set difficulty is completed or updated:
+    - `Easy`: 2.5 LP / hour
+    - `Medium`: 5 LP / hour
+    - `Hard`: 10 LP / hour
+- **Example (updating an active task):**
     ```bash
-    todo update 1 -d "Hard" -t "The backend logic was tricky."
+    todo update 7 -d "Hard"
     ```
-
+- **Example (logging a completed task):**
+    ```bash
+    todo update 7 -d "Medium" -r "This was easier than I thought."
+    ```
+- The `lp_gain` is calculated based on the task's duration, which is **rounded to the nearest 15-minute interval**. For example, a "Hard" task that took 40 minutes would be rounded to 45 minutes, earning `(10 / 60) * 45 = 7.5 LP`.
 ---
 
 ### `log`
 
-Displays a log of all completed tasks.
+Displays a log of all completed tasks. At the end of the log, it also shows a full LP status report, including decay.
 
 - **Usage:** `todo log`
-- **Output:** A detailed table including `ID`, `Course`, `Assignment`, `Finished At`, `Time Taken`, `Actual Difficulty`, `LP Gain`, and `Takeaways`.
+- **Output:** A detailed table of completed tasks, followed by the LP status summary.
 
 ---
 
 ### `status`
 
-Shows a summary of your Life Points (LP).
+Shows a detailed summary of your Life Points (LP), including the daily decay.
 
 - **Usage:** `todo status`
-- **Output:** Displays your `Total LP` (from all completed tasks) and `Daily LP` (from tasks completed today). 
+- **Output:** Displays:
+    - `Total LP Gain`: The sum of all LP from completed tasks.
+    - `Total Decay`: The total LP decay calculated from the season's start date.
+    - `Net Total LP`: The final, decay-adjusted LP for the season.
+    - `Today's LP Gain`: The LP gained from tasks completed today. 
