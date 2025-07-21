@@ -38,22 +38,23 @@ The application uses a local SQLite database named `tasks.db` to store all data.
     source venv/bin/activate
     ```
 
-2.  **Install dependencies:**
+2.  **Install dependencies and the CLI command:**
+    This command reads the `pyproject.toml` file, installs all required libraries, and creates the `todo` command-line tool within your virtual environment.
 
     ```bash
-    pip install -r requirements.txt
+    pip install -e .
     ```
 
 3.  **Initialize the database:**
-    This command creates the `tasks.db` file in your project directory with the correct schema.
+    This command creates the `tasks.db` file in your project directory with the correct schema. You only need to run this once.
 
     ```bash
-    python3 todo.py init
+    todo init
     ```
 
 ## Usage
 
-All commands are run using `python3 todo.py`.
+Once installed, all commands are run using the `todo` executable from your terminal (as long as your virtual environment is active).
 
 ---
 
@@ -61,13 +62,13 @@ All commands are run using `python3 todo.py`.
 
 Adds a new task to the list.
 
-- **Usage:** `python3 todo.py add <ASSIGNMENT>`
+- **Usage:** `todo add <ASSIGNMENT>`
 - **Options:**
     - `--course` or `-c`: Specify the course or category.
     - `--difficulty` or `-d`: Set the expected difficulty.
 - **Example:**
     ```bash
-    python3 todo.py add "Implement the new feature" -c "Work" -d "Hard"
+    todo add "Implement the new feature" -c "Work" -d "Hard"
     ```
 
 ---
@@ -76,7 +77,7 @@ Adds a new task to the list.
 
 Displays all active (incomplete) tasks.
 
-- **Usage:** `python3 todo.py list`
+- **Usage:** `todo list`
 - **Output:** A table showing the `ID`, `Course`, `Assignment`, `Expected Difficulty`, and `Status` (`In Progress` or `Not Started`).
 
 ---
@@ -85,10 +86,10 @@ Displays all active (incomplete) tasks.
 
 Marks the beginning of work on a task. Sets the `start_time`.
 
-- **Usage:** `python3 todo.py start <TASK_ID>`
+- **Usage:** `todo start <TASK_ID>`
 - **Example:**
     ```bash
-    python3 todo.py start 1
+    todo start 1
     ```
 
 ---
@@ -97,10 +98,10 @@ Marks the beginning of work on a task. Sets the `start_time`.
 
 Marks the end of work on a task. Sets the `finish_time`.
 
-- **Usage:** `python3 todo.py stop <TASK_ID>`
+- **Usage:** `todo stop <TASK_ID>`
 - **Example:**
     ```bash
-    python3 todo.py stop 1
+    todo stop 1
     ```
 
 ---
@@ -109,10 +110,10 @@ Marks the end of work on a task. Sets the `finish_time`.
 
 Marks a task as complete. If the task has no `finish_time`, it will be set to the current time.
 
-- **Usage:** `python3 todo.py done <TASK_ID>`
+- **Usage:** `todo done <TASK_ID>`
 - **Example:**
     ```bash
-    python3 todo.py done 1
+    todo done 1
     ```
 
 ---
@@ -121,7 +122,7 @@ Marks a task as complete. If the task has no `finish_time`, it will be set to th
 
 Updates a task with its actual difficulty and any takeaways. This command also calculates the `LP Gain`.
 
-- **Usage:** `python3 todo.py update <TASK_ID>`
+- **Usage:** `todo update <TASK_ID>`
 - **Options:**
     - `--difficulty` or `-d`: Set the actual difficulty (`Easy`, `Medium`, `Hard`).
     - `--takeaways` or `-t`: Add notes or takeaways.
@@ -131,7 +132,7 @@ Updates a task with its actual difficulty and any takeaways. This command also c
     - `Hard`: 10 LP
 - **Example:**
     ```bash
-    python3 todo.py update 1 -d "Hard" -t "The backend logic was tricky."
+    todo update 1 -d "Hard" -t "The backend logic was tricky."
     ```
 
 ---
@@ -140,7 +141,7 @@ Updates a task with its actual difficulty and any takeaways. This command also c
 
 Displays a log of all completed tasks.
 
-- **Usage:** `python3 todo.py log`
+- **Usage:** `todo log`
 - **Output:** A detailed table including `ID`, `Course`, `Assignment`, `Finished At`, `Time Taken`, `Actual Difficulty`, `LP Gain`, and `Takeaways`.
 
 ---
@@ -149,5 +150,5 @@ Displays a log of all completed tasks.
 
 Shows a summary of your Life Points (LP).
 
-- **Usage:** `python3 todo.py status`
+- **Usage:** `todo status`
 - **Output:** Displays your `Total LP` (from all completed tasks) and `Daily LP` (from tasks completed today). 
