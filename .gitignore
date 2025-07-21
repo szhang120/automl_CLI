@@ -1,18 +1,17 @@
-# --- Python ---
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# .gitignore
 
-# C extensions
-*.so
-
-# --- Project-Specific ---
-# SQLite Database and Journals
+# --- Project-Specific Files ---
+# Ignore the SQLite database and its journals
 *.db
 *.db-journal
 
-# --- Virtual Environments ---
+# Ignore backups, but not fixtures
+*.json
+!fixtures/
+!seeds/
+
+# --- Python Dependencies & Caches ---
+# Virtual environments
 .env
 .venv
 env/
@@ -21,7 +20,13 @@ ENV/
 env.bak/
 venv.bak/
 
-# --- Distribution / Packaging ---
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -45,13 +50,7 @@ MANIFEST
 *.manifest
 *.spec
 
-# --- Logs ---
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
 # --- Testing / Coverage ---
-# Unit test / coverage reports
 htmlcov/
 .tox/
 .nox/
@@ -66,35 +65,53 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# --- Logs ---
+pip-log.txt
+pip-delete-this-directory.txt
+*.log
+
 # --- IDEs / Editors ---
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
 # VS Code
 .vscode/
 
-# --- Documentation ---
-# mkdocs documentation
-/site
+# JetBrains / PyCharm
+.idea/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Spyder
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
 
 # --- Type Checkers ---
-# mypy
 .mypy_cache/
 .dmypy.json
 dmypy.json
-
-# Pyre type checker
 .pyre/
-
-# pytype static analyzer
 .pytype/
 
-# Cython debug symbols
+# --- Documentation ---
+# mkdocs
+/site
+
+# --- Other ---
+# Cython
 cython_debug/
 
-# --- macOS ---
-.DS_Store 
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# --- OS-Specific ---
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/ 

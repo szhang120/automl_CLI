@@ -20,7 +20,16 @@ dependencies = [
     "typer",
     "rich",
     "sqlalchemy",
+    "python-dateutil", # Added for dateutil.tz
+    "pandas",
+    "hvplot",
+    "panel",
+    "bokeh",
 ]
 
 [project.scripts]
-todo = "todo:app" 
+todo = "taskmaster_cli.todo:app" 
+
+[tool.setuptools.packages.find]
+where = ["."]  # Search for packages in the current directory
+include = ["taskmaster_cli*"]  # Only include packages starting with 'taskmaster_cli' 

@@ -49,17 +49,17 @@ The application uses a local SQLite database named `tasks.db`. It contains two m
     source venv/bin/activate
     ```
 
-2.  **Install dependencies:**
+2.  **Install the TaskMaster CLI package in editable mode:**
 
     ```bash
-    pip install -r requirements.txt
+    pip install -e .
     ```
 
 3.  **Initialize the database:**
     This command creates the `tasks.db` file in your project directory with the correct schema. You only need to run this once.
 
     ```bash
-    python -m todo init
+    python -m taskmaster_cli.todo init
     ```
 
 ## Usage
@@ -228,19 +228,13 @@ Updates any attribute of a task, whether it is active or complete.
     - `--dow`: Change the Day of Week. You can provide a number (0-6, Sunday-Saturday) which will be stored as an abbreviation (e.g., 'Sun'), or provide a string which will be stored as-is.
     - `--duration`: Manually set the time taken in minutes for a task.
     - `--reflection` or `-r`: Add or change your reflection on the task.
-- **LP Calculation:** `lp_gain` is calculated whenever a task with a set difficulty is completed or updated:
-    - `Easy`: 2.5 LP / hour
-    - `Medium`: 5 LP / hour
-    - `Hard`: 10 LP / hour
-- **Example (updating an active task):**
-    ```bash
-    todo update 7 -d "Hard"
-    ```
-- **Example (logging a completed task):**
-    ```bash
-    todo update 7 -d "Medium" -r "This was easier than I thought."
-    ```
-- The `lp_gain` is calculated based on the task's duration, which is **rounded to the nearest 15-minute interval**. For example, a "Hard" task that took 40 minutes would be rounded to 45 minutes, earning `(10 / 60) * 45 = 7.5 LP`.
+- **LP Calculation:** `lp_gain` is calculated whenever a task with a set difficulty is completed or updated. The base points for each difficulty are:
+    - `Easy`: 1 LP
+    - `Easy-Med`: 2 LP
+    - `Med`: 4 LP
+    - `Med-Hard`: 8 LP
+    - `Hard`: 16 LP
+    The final `lp_gain` is then calculated by multiplying the base points by the duration of the task in hours, rounded to the nearest 15-minute interval. For example, a "Hard" task that took 40 minutes would be rounded to 45 minutes, earning `16 * (45 / 60) = 12 LP`.
 ---
 
 ### `log`
