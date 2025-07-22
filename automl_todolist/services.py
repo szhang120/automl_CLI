@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta, time
 from typing import List, Optional, Dict, Any
 from dateutil.tz import gettz
 
@@ -205,7 +205,8 @@ class SeasonService:
                 name=name, 
                 is_active=True, 
                 start_date=now,
-                timezone_string=_current_timezone.key if hasattr(_current_timezone, 'key') else str(_current_timezone) # Initialize with current app timezone
+                timezone_string=_current_timezone.key if hasattr(_current_timezone, 'key') else str(_current_timezone),
+                day_start_hour=0 # Default to midnight
             )
             session.add(new_season)
             session.flush()
@@ -288,6 +289,34 @@ class SeasonService:
             session.expunge(season)
             logger.info(f"Set decay to {decay_value} for season: {season.name}")
             return season
+
+    @staticmethod
+    def set_day_start_hour(hour: int) -> Season:
+        """
+        Set the custom day start hour for the active season.
+        
+        Args:
+            hour: The hour (0-23) at which a new day begins for decay calculation.
+            
+        Returns:
+            Updated season.
+            
+        Raises:
+            ValueError: If the hour is not between 0 and 23.
+            NoActiveSeasonError: If no active season exists.
+        """
+        if not (0 <= hour <= 23):
+            raise ValueError("Day start hour must be between 0 and 23.")
+
+        with get_db_session() as session:
+            active_season = SeasonService.get_active_season(session)
+            active_season.day_start_hour = hour
+            session.add(active_season)
+            session.flush()
+            session.refresh(active_season)
+            session.expunge(active_season)
+            logger.info(f"Set day start hour to {hour} for season: {active_season.name}")
+            return active_season
 
 
 class TaskService:
@@ -564,24 +593,64 @@ class StatusService:
         with get_db_session() as session:
             active_season = SeasonService.get_active_season(session)
             
+            # Establish the season's specific timezone
+            season_tz_str = active_season.timezone_string
+            season_timezone = gettz(season_tz_str)
+            
             # Total LP gain
             total_lp_gain = session.query(func.sum(Task.lp_gain)).filter(
                 Task.season_id == active_season.id,
                 Task.completed == True
             ).scalar() or 0
             
-            # Today's LP gain
-            today = datetime.now(_current_timezone).date()
-            daily_lp_gain = session.query(func.sum(Task.lp_gain)).filter(
+            # Determine Today's LP gain - comparing naive dates
+            now_in_season_tz = datetime.now(season_timezone)
+            
+            # For today's LP gain, define 'today' based on the day_start_hour.
+            # If current time is before day_start_hour, 'today' refers to the previous calendar day.
+            today_for_lp_gain_comparison = now_in_season_tz.date()
+            if now_in_season_tz.time() < time(active_season.day_start_hour):
+                today_for_lp_gain_comparison = (now_in_season_tz - timedelta(days=1)).date()
+
+            # Fetch all completed tasks for the season and filter in Python based on day_start_hour
+            all_completed_tasks = session.query(Task).filter(
                 Task.season_id == active_season.id,
-                Task.completed == True,
-                func.date(Task.finish_time) == today
-            ).scalar() or 0
+                Task.completed == True
+            ).all()
+            
+            daily_lp_gain = 0.0
+            for task in all_completed_tasks:
+                if task.finish_time:
+                    # Localize task finish time to season's timezone
+                    task_finish_time_in_season_tz = task.finish_time.astimezone(season_timezone)
+                    
+                    # Determine the LP day for this task's finish time
+                    task_lp_day = task_finish_time_in_season_tz.date()
+                    if task_finish_time_in_season_tz.time() < time(active_season.day_start_hour):
+                        task_lp_day = (task_finish_time_in_season_tz - timedelta(days=1)).date()
+                    
+                    if task_lp_day == today_for_lp_gain_comparison and task.lp_gain is not None:
+                        daily_lp_gain += task.lp_gain
             
             # Decay calculation
-            start_date_utc = active_season.start_date.astimezone(timezone.utc).date()
-            today_utc = datetime.now(timezone.utc).date()
-            days_passed = (today_utc - start_date_utc).days
+            season_start_dt_in_season_tz = active_season.start_date.astimezone(season_timezone)
+
+            # Determine the precise datetime for the first decay point of the season
+            first_decay_point_for_season = datetime.combine(season_start_dt_in_season_tz.date(),
+                                                            time(active_season.day_start_hour),
+                                                            tzinfo=season_timezone)
+            if first_decay_point_for_season < season_start_dt_in_season_tz:
+                # If the season started after the day_start_hour on its start date, the first decay point
+                # for a *full day's* decay is on the *next* calendar day at day_start_hour.
+                first_decay_point_for_season += timedelta(days=1)
+            
+            # Calculate time difference from the first decay point to current time
+            time_since_first_decay = now_in_season_tz - first_decay_point_for_season
+
+            # Days passed is the number of full 24-hour periods that have elapsed since the first decay point.
+            # Use max(0, ...) to ensure days_passed is not negative before the first decay point is reached.
+            days_passed = max(0, int(time_since_first_decay.total_seconds() // (24 * 3600)))
+
             total_decay = days_passed * active_season.daily_decay
             net_total_lp = total_lp_gain - total_decay
             
@@ -716,18 +785,33 @@ class AnalysisService:
         """
         active_season = SeasonService.get_current_season()
         completed_tasks = TaskService.get_completed_tasks()
-        
+
+        # Establish the season's specific timezone and day start hour
+        season_tz_str = active_season.timezone_string
+        season_timezone = gettz(season_tz_str)
+        day_start_hour = active_season.day_start_hour
+
         if not completed_tasks:
             return pd.DataFrame()
             
-        # Create a DataFrame from tasks
-        df = pd.DataFrame([
-            {
-                'finish_date': task.finish_time.date(),
-                'lp_gain': task.lp_gain
-            } 
-            for task in completed_tasks if task.finish_time and task.lp_gain is not None
-        ])
+        # Create a DataFrame from tasks, adjusting finish_date for day_start_hour
+        data = []
+        for task in completed_tasks:
+            if task.finish_time and task.lp_gain is not None:
+                # Localize task finish time to season's timezone
+                task_finish_time_in_season_tz = task.finish_time.astimezone(season_timezone)
+                
+                # Determine the LP day for this task's finish time
+                task_lp_day = task_finish_time_in_season_tz.date()
+                if task_finish_time_in_season_tz.time() < time(day_start_hour):
+                    task_lp_day = (task_finish_time_in_season_tz - timedelta(days=1)).date()
+                
+                data.append({
+                    'finish_date': task_lp_day,
+                    'lp_gain': task.lp_gain
+                })
+        
+        df = pd.DataFrame(data)
         
         if df.empty:
             return pd.DataFrame()

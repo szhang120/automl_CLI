@@ -32,6 +32,7 @@ class Season(Base):
     is_active = Column(Boolean, default=False, nullable=False)
     daily_decay = Column(Float, default=56.0, nullable=False)
     timezone_string = Column(String, nullable=False) # New column
+    day_start_hour = Column(Integer, default=0, nullable=False) # New column for custom day start
     
     # Relationships
     tasks = relationship("Task", back_populates="season")

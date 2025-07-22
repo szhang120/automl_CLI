@@ -146,6 +146,22 @@ def season_set_timezone(tz_string: str):
     TimezoneService.set_timezone(tz_string)
     console.print(f"[bold green]Timezone set to:[/bold green] {tz_string}")
 
+@season_app.command("set-day-start-hour")
+@handle_errors
+def season_set_day_start_hour(hour: int = typer.Argument(..., min=0, max=23, help="The hour (0-23) at which a new day begins for LP decay calculation.")):
+    """Set the custom day start hour for the active season.
+
+    This allows you to define when a new 'day' begins for the purpose of
+    daily LP decay, typically when your activities for the previous day end.
+    For example, setting to 4 would mean 4:00 AM is the start of a new day.
+    """
+    try:
+        season = SeasonService.set_day_start_hour(hour)
+        console.print(f"[bold green]Day start hour for season '{season.name}' set to:[/bold green] {hour}:00")
+    except ValueError as e:
+        console.print(f"[bold red]Validation Error:[/bold red] {e}")
+        raise typer.Exit(1)
+
 
 @season_app.command("recalculate-lp")
 @handle_errors
