@@ -113,14 +113,20 @@ Shows the name of the currently active season.
 
 - **Usage:** `todo season current`
 
+#### `season get-timezone`
+
+Shows the timezone assigned to the currently active season. This is the timezone used for displaying timestamps for tasks within that season.
+
+- **Usage:** `todo season get-timezone`
+
 ---
 ### Backup and Restore (`todo backup`)
 
-This set of commands allows you to export your data to a safe format and import it back into the application. This is crucial for preserving your data if future versions of the app require database changes.
+This set of commands allows you to export your data to a safe format and import it back into the application. This is crucial for preserving your data if future versions of the app require database schema changes, such as adding new fields or modifying existing ones. The backup process now intelligently handles evolving schemas by ensuring timezone information is preserved for seasons and tasks.
 
 #### `backup export [FILENAME]`
 
-Exports all seasons and tasks to a JSON file.
+Exports all seasons and tasks to a JSON file. This backup includes all data necessary to fully restore your application state, including timezone information associated with each season and task timestamps.
 
 - **Usage:** `todo backup export [FILENAME]`
 - **Default Filename:** If you don't provide a filename, it defaults to `backup.json`.
@@ -131,7 +137,9 @@ Exports all seasons and tasks to a JSON file.
 
 #### `backup import [FILENAME]`
 
-Imports data from a JSON backup file. This is a **destructive operation** and will completely overwrite your current database.
+Imports data from a JSON backup file. This is a **destructive operation** and will completely overwrite your current database. Ensure you have backed up any current data you wish to keep before proceeding.
+
+During import, the application will recreate the database schema based on the current application version and then populate it with data from the backup file. It intelligently handles the import of timezone-aware timestamps and season-specific timezone settings.
 
 - **Usage:** `todo backup import [FILENAME] [OPTIONS]`
 - **Default Filename:** If you don't provide a filename, it defaults to `backup.json`.
@@ -141,6 +149,27 @@ Imports data from a JSON backup file. This is a **destructive operation** and wi
     ```bash
     todo backup import my_life_backup.json --yes
     ```
+
+#### **Handling Schema Migrations with Backup/Restore:**
+
+If the application's database schema changes (e.g., a new column is added), direct `init` commands on an existing database might lead to errors or data loss. The recommended procedure to safely migrate your data is:
+
+1.  **Export Existing Data:** Use `todo backup export` to create a JSON backup of your current data. This backup captures all essential information.
+    ```bash
+    todo backup export initial_backup.json
+    ```
+
+2.  **Reinitialize Database:** Force the database to reinitialize. This will drop all existing tables and recreate them with the latest schema defined in the application's models. This will also create a new default season.
+    ```bash
+    todo init --force --yes
+    ```
+
+3.  **Import Data:** Import your data from the backup file. The import process is designed to be compatible with schema changes and will correctly populate the newly structured database.
+    ```bash
+    todo backup import initial_backup.json --yes
+    ```
+
+This process ensures that your data is safely transferred to the new schema, preserving your history and settings.
 
 ---
 

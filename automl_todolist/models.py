@@ -27,10 +27,11 @@ class Season(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
-    start_date = Column(DateTime, nullable=False)
-    end_date = Column(DateTime, nullable=True)
+    start_date = Column(DateTime(timezone=True), nullable=False)
+    end_date = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Boolean, default=False, nullable=False)
     daily_decay = Column(Float, default=56.0, nullable=False)
+    timezone_string = Column(String, nullable=False) # New column
     
     # Relationships
     tasks = relationship("Task", back_populates="season")
@@ -65,13 +66,13 @@ class Task(Base):
     task = Column(String, index=True, nullable=False)
     project = Column(String, nullable=True)
     difficulty = Column(String, nullable=True)
-    start_time = Column(DateTime, nullable=True)
-    finish_time = Column(DateTime, nullable=True)
+    start_time = Column(DateTime(timezone=True), nullable=True)
+    finish_time = Column(DateTime(timezone=True), nullable=True)
     time_taken_minutes = Column(Integer, nullable=True)
     lp_gain = Column(Float, nullable=True)
     reflection = Column(String, nullable=True)
     completed = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
     season_id = Column(Integer, ForeignKey("seasons.id"), nullable=False)
     
     # Relationships

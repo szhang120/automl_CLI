@@ -9,7 +9,7 @@ DEFAULT_DATABASE_URL = "sqlite:///tasks.db"
 DATABASE_URL = os.getenv("AUTOML_TODOLIST_DATABASE_URL", DEFAULT_DATABASE_URL)
 
 # Default timezone configuration
-DEFAULT_TIMEZONE_STRING = "UTC"
+DEFAULT_TIMEZONE_STRING = "America/New_York"
 DEFAULT_TIMEZONE = gettz(DEFAULT_TIMEZONE_STRING)
 
 # Day of Week mapping

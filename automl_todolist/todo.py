@@ -5,6 +5,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 from typing import Optional
+from dateutil.tz import gettz
 
 from .database import init_database
 from .services import (
@@ -65,8 +66,17 @@ def handle_errors(func):
 
 @app.command()
 @handle_errors
-def init():
+def init(
+    force: bool = typer.Option(False, "--force", "-f", help="Force reinitialization, deleting existing data."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Bypass the confirmation prompt when using --force."),
+):
     """Initialize the database."""
+    if force:
+        if not yes and not typer.confirm("This will delete the existing database. Are you sure?"):
+            raise typer.Abort()
+        from .database import reset_database
+        reset_database()
+        console.print("[bold yellow]Existing database deleted.[/bold yellow]")
     init_database()
     console.print("[bold green]Database initialized.[/bold green]")
     console.print("[bold blue]Created a default season.[/bold blue]")
@@ -108,6 +118,13 @@ def season_current():
     """Show the current active season."""
     season = SeasonService.get_current_season()
     console.print(f"The current active season is: [bold blue]{season.name}[/bold blue]")
+
+@season_app.command("get-timezone")
+@handle_errors
+def season_get_timezone():
+    """Show the timezone assigned to the current active season."""
+    season = SeasonService.get_current_season()
+    console.print(f"The timezone for season '{season.name}' is: [bold blue]{season.timezone_string}[/bold blue]")
 
 @season_app.command("set-decay")
 @handle_errors
@@ -256,10 +273,19 @@ def log():
     table.add_column("LP Gain", style="green", no_wrap=True)
     table.add_column("Reflection", style="white")
 
+    # Get the active season's timezone
+    season_timezone = gettz(season.timezone_string)
+    if season_timezone is None:
+        # Fallback if timezone string is invalid, though validation should prevent this
+        season_timezone = TimezoneService.get_current_timezone() 
+
     for task in tasks:
-        finish_time_str = (
-            task.finish_time.strftime("%Y-%m-%d %H:%M") if task.finish_time else "N/A"
-        )
+        finish_time_str = "N/A"
+        if task.finish_time:
+            # Convert UTC finish_time to the season's timezone for display
+            localized_finish_time = task.finish_time.astimezone(season_timezone)
+            finish_time_str = localized_finish_time.strftime("%Y-%m-%d %H:%M")
+        
         time_taken = "N/A"
         if task.time_taken_minutes is not None:
             time_taken = f"{task.time_taken_minutes} min (manual)"

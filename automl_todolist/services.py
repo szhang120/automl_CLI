@@ -204,7 +204,8 @@ class SeasonService:
             new_season = Season(
                 name=name, 
                 is_active=True, 
-                start_date=now
+                start_date=now,
+                timezone_string=_current_timezone.key if hasattr(_current_timezone, 'key') else str(_current_timezone) # Initialize with current app timezone
             )
             session.add(new_season)
             session.flush()
@@ -605,6 +606,17 @@ class TimezoneService:
         timezone_obj = ValidationService.validate_timezone(timezone_string)
         _current_timezone = timezone_obj
         logger.info(f"Timezone set to: {timezone_string}")
+
+        # Additionally, update the active season's timezone_string in the database
+        with get_db_session() as session:
+            try:
+                active_season = SeasonService.get_active_season(session)
+                active_season.timezone_string = timezone_string
+                session.add(active_season)
+                session.commit() # Commit immediately to persist the timezone change for the active season
+                logger.info(f"Updated active season '{active_season.name}' timezone to: {timezone_string}")
+            except NoActiveSeasonError:
+                logger.warning("No active season to update timezone for. Timezone set globally but not persisted to a season.")
     
     @staticmethod
     def get_current_timezone():
@@ -623,9 +635,9 @@ class BackupService:
             
             backup_data = []
             for season in seasons:
-                season_data = {c.name: getattr(season, c.name) for c in season.__table__.columns}
+                season_data = {c.name: getattr(season, c.name) for c in season.__table__.columns if hasattr(season, c.name)}
                 season_data["tasks"] = [
-                    {c.name: getattr(task, c.name) for c in task.__table__.columns}
+                    {c.name: getattr(task, c.name) for c in task.__table__.columns if hasattr(task, c.name)}
                     for task in season.tasks
                 ]
                 backup_data.append(season_data)
@@ -655,7 +667,7 @@ class BackupService:
             raise BackupImportError(f"Failed to read backup file {filename}: {e}") from e
         
         # Reset database
-        from database import reset_database
+        from .database import reset_database
         reset_database()
         
         # Import data

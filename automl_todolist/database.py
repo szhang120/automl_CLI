@@ -70,7 +70,8 @@ def init_database() -> None:
                 default_season = Season(
                     name=DEFAULT_SEASON_NAME, 
                     is_active=True,
-                    start_date=datetime.now(DEFAULT_TIMEZONE)
+                    start_date=datetime.now(DEFAULT_TIMEZONE),
+                    timezone_string=DEFAULT_TIMEZONE.key if hasattr(DEFAULT_TIMEZONE, 'key') else "UTC"
                 )
                 session.add(default_season)
                 logger.info(f"Created default season: {DEFAULT_SEASON_NAME}")
