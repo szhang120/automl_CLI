@@ -1,5 +1,5 @@
 #!/bin/bash
-# An end-to-end test script for the backup and restore functionality.
+# An end-to-end test script for the AutoML TodoList CLI backup and restore functionality.
 
 # Stop on first error
 set -e

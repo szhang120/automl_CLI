@@ -1,4 +1,4 @@
-"""Business logic services for the TaskMaster CLI application."""
+"""Business logic services for the AutoML TodoList CLI application."""
 
 import json
 import logging
@@ -7,8 +7,10 @@ from typing import List, Optional, Dict, Any
 from dateutil.tz import gettz
 
 import pandas as pd
+import plotly.express as px
+
 import panel as pn
-import hvplot.pandas 
+# import hvplot.pandas 
 
 pn.extension()
 
@@ -127,7 +129,21 @@ class LPCalculationService:
         if task.time_taken_minutes is not None:
             duration_minutes = task.time_taken_minutes
         elif task.start_time and task.finish_time:
-            duration_minutes = (task.finish_time - task.start_time).total_seconds() / 60
+            # Ensure both are timezone-aware and in UTC for safe subtraction
+            start_dt = task.start_time
+            finish_dt = task.finish_time
+
+            # If a datetime object loaded from DB is naive, assume it's in the application's current timezone
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=_current_timezone)
+            if finish_dt.tzinfo is None:
+                finish_dt = finish_dt.replace(tzinfo=_current_timezone)
+
+            # Convert both to UTC before subtraction to avoid offset issues if timezones were different
+            start_dt_utc = start_dt.astimezone(timezone.utc)
+            finish_dt_utc = finish_dt.astimezone(timezone.utc)
+
+            duration_minutes = (finish_dt_utc - start_dt_utc).total_seconds() / 60
         
         if duration_minutes > 0:
             # Round to the nearest 15-minute interval
@@ -701,13 +717,19 @@ class AnalysisService:
             for task in completed_tasks if task.finish_time and task.lp_gain is not None
         ])
         
+        if df.empty:
+            return pd.DataFrame()
+
         # Group by day and sum LP gains
         daily_lp = df.groupby('finish_date')['lp_gain'].sum().reset_index()
         daily_lp = daily_lp.rename(columns={'finish_date': 'date', 'lp_gain': 'daily_lp_gain'})
         
+        # Ensure 'date' column is in datetime format for merging
+        daily_lp['date'] = pd.to_datetime(daily_lp['date'])
+        
         # Create a full date range for the season
-        start_date = active_season.start_date.date()
-        end_date = datetime.now(_current_timezone).date()
+        start_date = min(daily_lp['date'])
+        end_date = max(daily_lp['date'])
         date_range = pd.date_range(start=start_date, end=end_date, freq='D')
         
         # Create a DataFrame for the full date range
@@ -721,37 +743,40 @@ class AnalysisService:
         season_df['net_daily_lp'] = season_df['daily_lp_gain'] - season_df['daily_decay']
         season_df['cumulative_net_lp'] = season_df['net_daily_lp'].cumsum()
         
+        # Set date as index for cleaner plotting
+        season_df = season_df.set_index('date')
+        
         return season_df
         
     @staticmethod
-    def plot_lp_timeseries() -> pn.Column:
+    def plot_lp_timeseries_plotly(save_png: bool = False, filename="lp_plot.png"):
         """
-        Generate a Panel plot of cumulative net LP over time.
-        
-        Returns:
-            pn.Column: A Panel object containing the plot and title
+        Generate and either serve or save a Plotly plot.
         """
         lp_df = AnalysisService.get_lp_timeseries_data()
         
-        if lp_df.empty:
-            return pn.Column(
-                "### Cumulative LP Over Time",
-                pn.pane.Markdown("No data available to plot.")
-            )
-            
-        # Create the plot
-        lp_plot = lp_df.hvplot.line(
-            x='date', 
+        if lp_df.empty or len(lp_df) < 2:
+            print("Not enough data to plot.")
+            return
+
+        fig = px.line(
+            lp_df,
+            x=lp_df.index,
             y='cumulative_net_lp',
             title='Cumulative Net LP Over Time',
-            ylabel='Cumulative Net LP',
-            xlabel='Date',
-            height=400,
-            width=800,
-            grid=True
+            labels={'date': 'Date', 'cumulative_net_lp': 'Cumulative Net LP'}
         )
         
-        return pn.Column(
-            "### Cumulative LP Over Time",
-            lp_plot
-        ) 
+        fig.update_layout(
+            template="plotly_white",
+            xaxis=dict(tickformat="%Y-%m-%d"),
+            yaxis=dict(gridcolor='lightgrey'),
+            xaxis_title="Date",
+            yaxis_title="Cumulative Net LP",
+        )
+        
+        if save_png:
+            fig.write_image(filename)
+            print(f"Plot saved to {filename}")
+        else:
+            fig.show() 

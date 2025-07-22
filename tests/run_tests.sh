@@ -1,5 +1,5 @@
 #!/bin/bash
-# A comprehensive test script for the TaskMaster CLI tool.
+# A comprehensive test script for the AutoML TodoList CLI tool.
 
 # Stop on first error
 set -e
@@ -11,7 +11,7 @@ echo ""
 
 echo "--- 2. CORE WORKFLOW: Testing the full lifecycle of a task ---"
 echo "--> Adding a new task to the 'Default Season'..."
-todo add "My first real task" -p "Core Test" -d "Medium" --dow 1
+todo add "My first real task" -p "Core Test" -d 3 --dow 1
 
 echo "--> Current active task list:"
 todo list
@@ -34,14 +34,14 @@ todo log
 echo ""
 
 echo "--> Updating completed task 1 with reflection and final difficulty..."
-todo update 1 -d "Hard" -r 'This was harder than expected!'
+todo update 1 -d 5 -r 'This was harder than expected!'
 echo "--> Log after update (should have LP Gain):"
 todo log
 echo ""
 
 echo "--- 3. AFTER-THE-FACT LOGGING: Testing the --completed flag ---"
 echo "--> Adding a pre-completed task for Sunday (DoW 0)..."
-todo add "Logged this after it was done" -p "Logging Test" -d "Easy" --dow 0 --completed
+todo add "Logged this after it was done" -p "Logging Test" -d 1 --dow 0 --completed
 echo "--> Log after adding the completed task:"
 todo log
 echo ""

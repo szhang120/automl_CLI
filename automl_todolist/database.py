@@ -1,4 +1,4 @@
-"""Database configuration and session management for TaskMaster CLI."""
+"""Database configuration and session management for AutoML TodoList CLI."""
 
 import logging
 from contextlib import contextmanager

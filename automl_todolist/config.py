@@ -1,4 +1,4 @@
-"""Configuration settings and constants for the TaskMaster CLI application."""
+"""Configuration settings and constants for the AutoML TodoList CLI application."""
 
 import os
 from typing import Dict
@@ -6,7 +6,7 @@ from dateutil.tz import gettz
 
 # Database configuration
 DEFAULT_DATABASE_URL = "sqlite:///tasks.db"
-DATABASE_URL = os.getenv("TASKMASTER_DATABASE_URL", DEFAULT_DATABASE_URL)
+DATABASE_URL = os.getenv("AUTOML_TODOLIST_DATABASE_URL", DEFAULT_DATABASE_URL)
 
 # Default timezone configuration
 DEFAULT_TIMEZONE_STRING = "UTC"
@@ -62,5 +62,5 @@ MIN_DOW_VALUE = 0
 MAX_DOW_VALUE = 6
 
 # Application metadata
-APP_NAME = "TaskMaster CLI"
+APP_NAME = "AutoML TodoList CLI"
 APP_VERSION = "0.1.0" 

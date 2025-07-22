@@ -1,4 +1,4 @@
-# TaskMaster CLI
+# AutoML TodoList CLI
 
 A powerful, command-line to-do list application for detailed life and task tracking, inspired by a comprehensive Google Sheet.
 
@@ -24,7 +24,7 @@ The application uses a local SQLite database named `tasks.db`. It contains two m
 - `start_date`: (DateTime) The timestamp when the season was started.
 - `end_date`: (DateTime) The timestamp when the season was archived.
 - `is_active`: (Boolean) A flag to mark the current season.
-- `daily_decay`: (Float) The daily LP decay value for the season (default: 30.0).
+- `daily_decay`: (Float) The daily LP decay value for the season (default: 56.0).
 
 ### `tasks` Schema
 - `id`: (Integer) The unique ID of the task.
@@ -49,7 +49,7 @@ The application uses a local SQLite database named `tasks.db`. It contains two m
     source venv/bin/activate
     ```
 
-2.  **Install the TaskMaster CLI package in editable mode:**
+2.  **Install the AutoML TodoList CLI package in editable mode:**
 
     ```bash
     pip install -e .
@@ -59,7 +59,7 @@ The application uses a local SQLite database named `tasks.db`. It contains two m
     This command creates the `tasks.db` file in your project directory with the correct schema. You only need to run this once.
 
     ```bash
-    python -m taskmaster_cli.todo init
+    python -m automl_todolist.todo init
     ```
 
 ## Usage
@@ -140,6 +140,29 @@ Imports data from a JSON backup file. This is a **destructive operation** and wi
 - **Example:**
     ```bash
     todo backup import my_life_backup.json --yes
+    ```
+
+---
+
+### Data Analysis (`todo analysis`)
+
+This set of commands allows you to visualize your productivity and LP trends over time.
+
+#### `analysis plot-lp`
+
+Generates a plot of your cumulative net LP for the current season. By default, it launches an interactive plot in your web browser.
+
+- **Usage:** `todo analysis plot-lp [OPTIONS]`
+- **Options:**
+    - `--save-png` or `-s`: Save the plot as a PNG image file instead of opening it in a browser.
+    - `--filename` or `-f`: Specify the filename for the saved PNG image (default: `lp_plot.png`).
+- **Example (interactive plot):**
+    ```bash
+    todo analysis plot-lp
+    ```
+- **Example (saving to a file):**
+    ```bash
+    todo analysis plot-lp --save-png --filename my_progress.png
     ```
 
 ---

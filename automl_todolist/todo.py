@@ -1,4 +1,4 @@
-"""TaskMaster CLI - A powerful command-line to-do list application."""
+"""AutoML TodoList CLI - A powerful command-line to-do list application."""
 
 import logging
 import typer
@@ -12,7 +12,7 @@ from .services import (
     BackupService, ValidationService
 )
 from .exceptions import (
-    TaskMasterError, NoActiveSeasonError, TaskNotFoundError, 
+    AutoMLTodolistError, NoActiveSeasonError, TaskNotFoundError, 
     SeasonNotFoundError, InvalidDifficultyError, InvalidDayOfWeekError,
     InvalidTimezoneError, BackupFileNotFoundError, BackupImportError
 )
@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Typer application setup
-app = typer.Typer(help="TaskMaster CLI - A powerful task management tool")
+app = typer.Typer(help="AutoML TodoList CLI - A powerful task management tool")
 season_app = typer.Typer(help="Season management commands")
 backup_app = typer.Typer(help="Backup and restore commands")
 analysis_app = typer.Typer(help="Data analysis commands")
@@ -54,7 +54,7 @@ def handle_errors(func):
         except (BackupFileNotFoundError, BackupImportError) as e:
             console.print(f"[bold red]Backup Error:[/bold red] {e}")
             raise typer.Exit(1)
-        except TaskMasterError as e:
+        except AutoMLTodolistError as e:
             console.print(f"[bold red]Error:[/bold red] {e}")
             raise typer.Exit(1)
         except Exception as e:
@@ -346,15 +346,20 @@ def status():
 
 @analysis_app.command("plot-lp")
 @handle_errors
-def plot_lp():
+def plot_lp(
+    save_png: bool = typer.Option(False, "--save-png", "-s", help="Save the plot as a PNG file instead of serving it."),
+    filename: str = typer.Option("lp_plot.png", "--filename", "-f", help="Filename for the saved PNG plot.")
+):
     """Generate and serve a plot of cumulative net LP over time."""
     from .services import AnalysisService
     
-    plot = AnalysisService.plot_lp_timeseries()
-    
-    console.print("[bold green]Generating plot...[/bold green]")
-    plot.show(title="LP Analysis", port=0) # port=0 finds a random available port
-    console.print("[bold blue]Plot server started. Check your browser.[/bold blue]")
+    if save_png:
+        console.print(f"[bold green]Generating and saving plot to {filename}...[/bold green]")
+        AnalysisService.plot_lp_timeseries_plotly(save_png=True, filename=filename)
+    else:
+        console.print("[bold green]Generating and serving interactive plot...[/bold green]")
+        AnalysisService.plot_lp_timeseries_plotly()
+        console.print("[bold blue]Plot server started. Check your browser.[/bold blue]")
 
 if __name__ == "__main__":
     app() 

@@ -1,4 +1,4 @@
-"""Database models for the TaskMaster CLI application."""
+"""Database models for the AutoML TodoList CLI application."""
 
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, ForeignKey
 from sqlalchemy.orm import declarative_base, relationship, Mapped, mapped_column

@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "taskmaster-cli"
+name = "automl-todolist"
 version = "0.1.0"
 authors = [
   { name="Your Name", email="you@example.com" },
@@ -20,16 +20,15 @@ dependencies = [
     "typer",
     "rich",
     "sqlalchemy",
-    "python-dateutil", # Added for dateutil.tz
+    "python-dateutil",
     "pandas",
-    "hvplot",
-    "panel",
-    "bokeh",
+    "plotly",
+    "kaleido"
 ]
 
 [project.scripts]
-todo = "taskmaster_cli.todo:app" 
+todo = "automl_todolist.todo:app" 
 
 [tool.setuptools.packages.find]
-where = ["."]  # Search for packages in the current directory
-include = ["taskmaster_cli*"]  # Only include packages starting with 'taskmaster_cli' 
+where = ["."]
+include = ["automl_todolist*"] 

@@ -1,3 +1,7 @@
 typer
 rich
-sqlalchemy 
+sqlalchemy
+python-dateutil
+pandas
+plotly
+kaleido 

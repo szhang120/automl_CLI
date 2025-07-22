@@ -1,5 +1,5 @@
 #!/bin/bash
-# A rigorous test script for duration, LP calculation, and decay workflows.
+# A rigorous test script for duration, LP calculation, and decay workflows for the AutoML TodoList CLI.
 
 # Stop on first error
 set -e
@@ -17,13 +17,13 @@ get_last_task_id() {
 echo "--- TEST CASE 1: After-the-Fact Logging with Manual Duration ---"
 echo "--> Logging a completed 'Hard' task that took 90 minutes."
 echo "    (Expected LP: (10/60) * 90 = 15.0)"
-todo add "Manual Duration Task" -p "Workflow 1" -d "Hard" --completed --duration 90
+todo add "Manual Duration Task" -p "Workflow 1" -d 5 --completed --duration 90
 echo "--> RESULT: Test Case 1 Complete."
 echo ""
 
 echo "--- TEST CASE 2: Start/Stop Workflow ---"
 echo "--> Adding a 'Medium' task and starting/stopping it."
-todo add "Start/Stop Task" -p "Workflow 2" -d "Medium"
+todo add "Start/Stop Task" -p "Workflow 2" -d 3
 last_id_timed=$(get_last_task_id)
 todo start $last_id_timed
 # We can't reliably test the exact duration, but we can ensure it's marked as done.

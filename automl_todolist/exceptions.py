@@ -1,24 +1,24 @@
-"""Custom exceptions for the TaskMaster CLI application."""
+"""Custom exceptions for the AutoML TodoList CLI application."""
 
 
-class TaskMasterError(Exception):
-    """Base exception for all TaskMaster-specific errors."""
+class AutoMLTodolistError(Exception):
+    """Base exception for all AutoML Todolist-specific errors."""
     pass
 
 
-class DatabaseError(TaskMasterError):
+class DatabaseError(AutoMLTodolistError):
     """Raised when database operations fail."""
     pass
 
 
-class NoActiveSeasonError(TaskMasterError):
+class NoActiveSeasonError(AutoMLTodolistError):
     """Raised when an operation requires an active season but none exists."""
     
     def __init__(self, message: str = "No active season found. Use 'season start' to begin."):
         super().__init__(message)
 
 
-class TaskNotFoundError(TaskMasterError):
+class TaskNotFoundError(AutoMLTodolistError):
     """Raised when a requested task cannot be found."""
     
     def __init__(self, task_id: int):
@@ -26,7 +26,7 @@ class TaskNotFoundError(TaskMasterError):
         self.task_id = task_id
 
 
-class SeasonNotFoundError(TaskMasterError):
+class SeasonNotFoundError(AutoMLTodolistError):
     """Raised when a requested season cannot be found."""
     
     def __init__(self, season_id: int):
@@ -34,7 +34,7 @@ class SeasonNotFoundError(TaskMasterError):
         self.season_id = season_id
 
 
-class ValidationError(TaskMasterError):
+class ValidationError(AutoMLTodolistError):
     """Raised when input validation fails."""
     pass
 
@@ -69,7 +69,7 @@ class InvalidTimezoneError(ValidationError):
         self.timezone_string = timezone_string
 
 
-class BackupFileNotFoundError(TaskMasterError):
+class BackupFileNotFoundError(AutoMLTodolistError):
     """Raised when a backup file cannot be found."""
     
     def __init__(self, filename: str):
@@ -77,6 +77,6 @@ class BackupFileNotFoundError(TaskMasterError):
         self.filename = filename
 
 
-class BackupImportError(TaskMasterError):
+class BackupImportError(AutoMLTodolistError):
     """Raised when backup import fails."""
     pass 
