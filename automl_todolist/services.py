@@ -17,6 +17,9 @@ pn.extension()
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from rich.table import Table
+from rich.console import Console
+
 from .config import (
     DOW_MAP, DIFFICULTY_MAP_INT_TO_STR, POINTS_MAP, 
     DIFFICULTY_NORMALIZATION_MAP, DEFAULT_TIMEZONE,
@@ -408,6 +411,79 @@ class TaskService:
             for task in tasks:
                 session.expunge(task)
             return tasks
+
+    @staticmethod
+    def get_completed_tasks_as_df() -> pd.DataFrame:
+        """Get all completed tasks for the active season as a pandas DataFrame."""
+        tasks = TaskService.get_completed_tasks()
+        if not tasks:
+            return pd.DataFrame()
+        
+        data = [
+            {
+                'finish_time': task.finish_time,
+                'lp_gain': task.lp_gain
+            } for task in tasks
+        ]
+        
+        df = pd.DataFrame(data)
+        if 'finish_time' in df.columns:
+            df['finish_time'] = pd.to_datetime(df['finish_time'])
+            # Ensure all timestamps are timezone-aware. Localize naive ones to UTC.
+            df['finish_time'] = df['finish_time'].apply(
+                lambda x: x.tz_localize(timezone.utc) if pd.notna(x) and x.tzinfo is None else x
+            )
+        return df
+
+    @staticmethod
+    def get_completed_tasks_table() -> Table:
+        """Get a Rich Table of all completed tasks for the active season."""
+        active_season = SeasonService.get_current_season()
+        tasks = TaskService.get_completed_tasks()
+
+        table = Table(title=f"Completed Tasks for {active_season.name}")
+        table.add_column("ID", style="cyan", no_wrap=True)
+        table.add_column("DoW", style="white", no_wrap=True)
+        table.add_column("Project", style="yellow", no_wrap=True)
+        table.add_column("Task", style="magenta")
+        table.add_column("Finished At", style="green", no_wrap=True)
+        table.add_column("Time Taken", style="red", no_wrap=True)
+        table.add_column("Difficulty", style="blue", no_wrap=True)
+        table.add_column("LP Gain", style="green", no_wrap=True)
+        table.add_column("Reflection", style="white")
+
+        # Get the active season's timezone
+        season_timezone = gettz(active_season.timezone_string)
+        if season_timezone is None:
+            # Fallback if timezone string is invalid, though validation should prevent this
+            season_timezone = TimezoneService.get_current_timezone() 
+
+        for task in tasks:
+            finish_time_str = "N/A"
+            if task.finish_time:
+                # Convert UTC finish_time to the season's timezone for display
+                localized_finish_time = task.finish_time.astimezone(season_timezone)
+                finish_time_str = localized_finish_time.strftime("%Y-%m-%d %H:%M")
+            
+            time_taken = "N/A"
+            if task.time_taken_minutes is not None:
+                time_taken = f"{task.time_taken_minutes} min (manual)"
+            elif task.start_time and task.finish_time:
+                time_taken_delta = task.finish_time - task.start_time
+                time_taken = str(time_taken_delta).split(".")[0]
+
+            table.add_row(
+                str(task.id),
+                task.dow or "N/A",
+                task.project or "N/A",
+                task.task,
+                finish_time_str,
+                time_taken,
+                task.difficulty or "N/A",
+                str(task.lp_gain) if task.lp_gain is not None else "N/A",
+                task.reflection or "N/A",
+            )
+        return table
     
     @staticmethod
     def get_task(task_id: int) -> Task:
@@ -588,81 +664,126 @@ class StatusService:
     """Service for status and statistics calculations."""
     
     @staticmethod
-    def get_lp_status() -> Dict[str, float]:
-        """Get LP status for the current season."""
+    def format_timedelta(td: timedelta) -> str:
+        """Formats a timedelta into a human-readable string of hours and minutes."""
+        if not isinstance(td, timedelta):
+            return "N/A"
+        hours, remainder = divmod(td.total_seconds(), 3600)
+        minutes, _ = divmod(remainder, 60)
+        return f"{int(hours)} hours, {int(minutes)} minutes"
+
+    @staticmethod
+    def get_lp_status() -> dict:
+        """
+        Get the current LP status for the active season.
+
+        Returns:
+            dict: A dictionary containing LP status details.
+        """
+        active_season = SeasonService.get_current_season()
+        if not active_season:
+            raise NoActiveSeasonError("Cannot get LP status because there is no active season.")
+
         with get_db_session() as session:
-            active_season = SeasonService.get_active_season(session)
-            
-            # Establish the season's specific timezone
+            # Establish the season's specific timezone and day start hour
             season_tz_str = active_season.timezone_string
             season_timezone = gettz(season_tz_str)
+            day_start_hour = active_season.day_start_hour
+
+            # Get all completed tasks for the season to build a DataFrame
+            df_completed = TaskService.get_completed_tasks_as_df()
             
-            # Total LP gain
-            total_lp_gain = session.query(func.sum(Task.lp_gain)).filter(
-                Task.season_id == active_season.id,
-                Task.completed == True
-            ).scalar() or 0
-            
-            # Determine Today's LP gain - comparing naive dates
+            # Calculate total LP gain for the season
+            total_lp_gain = df_completed['lp_gain'].sum() if not df_completed.empty else 0.0
+
+            # Current time in season's timezone
             now_in_season_tz = datetime.now(season_timezone)
-            
-            # For today's LP gain, define 'today' based on the day_start_hour.
-            # If current time is before day_start_hour, 'today' refers to the previous calendar day.
+
+            # Determine today's date for LP gain comparison
             today_for_lp_gain_comparison = now_in_season_tz.date()
-            if now_in_season_tz.time() < time(active_season.day_start_hour):
+            if now_in_season_tz.time() < time(day_start_hour):
                 today_for_lp_gain_comparison = (now_in_season_tz - timedelta(days=1)).date()
 
-            # Fetch all completed tasks for the season and filter in Python based on day_start_hour
-            all_completed_tasks = session.query(Task).filter(
-                Task.season_id == active_season.id,
-                Task.completed == True
-            ).all()
-            
-            daily_lp_gain = 0.0
-            for task in all_completed_tasks:
-                if task.finish_time:
-                    # Localize task finish time to season's timezone
-                    task_finish_time_in_season_tz = task.finish_time.astimezone(season_timezone)
-                    
-                    # Determine the LP day for this task's finish time
-                    task_lp_day = task_finish_time_in_season_tz.date()
-                    if task_finish_time_in_season_tz.time() < time(active_season.day_start_hour):
-                        task_lp_day = (task_finish_time_in_season_tz - timedelta(days=1)).date()
-                    
-                    if task_lp_day == today_for_lp_gain_comparison and task.lp_gain is not None:
-                        daily_lp_gain += task.lp_gain
-            
             # Decay calculation
             season_start_dt_in_season_tz = active_season.start_date.astimezone(season_timezone)
-
-            # Determine the precise datetime for the first decay point of the season
-            first_decay_point_for_season = datetime.combine(season_start_dt_in_season_tz.date(),
-                                                            time(active_season.day_start_hour),
-                                                            tzinfo=season_timezone)
+            first_decay_point_for_season = datetime.combine(season_start_dt_in_season_tz.date(), time(day_start_hour), tzinfo=season_timezone)
             if first_decay_point_for_season < season_start_dt_in_season_tz:
-                # If the season started after the day_start_hour on its start date, the first decay point
-                # for a *full day's* decay is on the *next* calendar day at day_start_hour.
                 first_decay_point_for_season += timedelta(days=1)
             
-            # Calculate time difference from the first decay point to current time
             time_since_first_decay = now_in_season_tz - first_decay_point_for_season
-
-            # Days passed is the number of full 24-hour periods that have elapsed since the first decay point.
-            # Use max(0, ...) to ensure days_passed is not negative before the first decay point is reached.
             days_passed = max(0, int(time_since_first_decay.total_seconds() // (24 * 3600)))
-
             total_decay = days_passed * active_season.daily_decay
+
+            # Helper function to determine if a task's finish time falls on today's LP gain date
+            def is_task_for_today_lp(row):
+                task_finish_time = row['finish_time']
+                if pd.notna(task_finish_time):
+                    task_finish_time_in_season_tz = task_finish_time.astimezone(season_timezone)
+                    
+                    task_lp_day = task_finish_time_in_season_tz.date()
+                    if task_finish_time_in_season_tz.time() < time(day_start_hour):
+                        task_lp_day = (task_finish_time_in_season_tz - timedelta(days=1)).date()
+                    
+                    return task_lp_day == today_for_lp_gain_comparison
+                return False
+
+            # Calculate daily LP gain
+            if df_completed.empty:
+                daily_lp_gain = 0.0
+            else:
+                daily_lp_gain = df_completed[df_completed.apply(is_task_for_today_lp, axis=1)]['lp_gain'].sum()
+
+            # Calculate time until next decay
+            todays_decay_point = now_in_season_tz.replace(hour=day_start_hour, minute=0, second=0, microsecond=0)
+            if now_in_season_tz >= todays_decay_point:
+                next_decay_point = todays_decay_point + timedelta(days=1)
+            else:
+                next_decay_point = todays_decay_point
+            time_until_next_decay = next_decay_point - now_in_season_tz
+
+            # Calculate LP needed to survive next decay
             net_total_lp = total_lp_gain - total_decay
-            
+            daily_decay = active_season.daily_decay
+            breakeven_lp_gain_required = max(0, daily_decay - net_total_lp)
+
             return {
                 'total_lp_gain': total_lp_gain,
-                'daily_lp_gain': daily_lp_gain,
                 'total_decay': total_decay,
                 'net_total_lp': net_total_lp,
+                'daily_lp_gain': daily_lp_gain,
                 'days_passed': days_passed,
-                'daily_decay_rate': active_season.daily_decay,
-                'season_name': active_season.name
+                'breakeven_lp_gain_required': breakeven_lp_gain_required,
+                'time_until_next_decay': time_until_next_decay,
             }
+
+    @staticmethod
+    def get_status_string() -> str:
+        """
+        Get a formatted string of the current LP status.
+        
+        Returns:
+            str: A formatted string containing LP status details.
+        """
+        lp_status = StatusService.get_lp_status()
+        active_season = SeasonService.get_current_season()
+
+        status_string = f"Current Season: {active_season.name}\n"
+        status_string += f"Total LP Gain: {lp_status['total_lp_gain']:.2f}\n"
+        status_string += f"Total Decay: ({lp_status['days_passed']} days * {active_season.daily_decay} LP/day) = {lp_status['total_decay']:.2f}\n"
+        status_string += f"Net Total LP: {lp_status['net_total_lp']:.2f}\n"
+        status_string += "--------------------\n"
+        status_string += f"Today's LP Gain: {lp_status['daily_lp_gain']:.2f}\n"
+        status_string += "--------------------\n"
+
+        breakeven_lp = lp_status['breakeven_lp_gain_required']
+        time_str = StatusService.format_timedelta(lp_status['time_until_next_decay'])
+
+        if breakeven_lp > 0:
+            status_string += f"Survival Delta: You need to gain {breakeven_lp:.2f} LP in the next {time_str} to break even.\n"
+        else:
+            status_string += f"Survival Delta: You will survive the next decay. Next decay in {time_str}.\n"
+
+        return status_string
 
 
 class TimezoneService:

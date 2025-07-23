@@ -36,32 +36,20 @@ console = Console()
 
 
 def handle_errors(func):
-    """Decorator to handle common exceptions and display user-friendly error messages."""
+    """Decorator to handle common errors and display them in a standard format."""
     from functools import wraps
     
     @wraps(func)
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
-        except NoActiveSeasonError as e:
-            console.print(f"[bold red]Error:[/bold red] {e}")
-            raise typer.Exit(1)
-        except (TaskNotFoundError, SeasonNotFoundError) as e:
-            console.print(f"[bold red]Error:[/bold red] {e}")
-            raise typer.Exit(1)
-        except (InvalidDifficultyError, InvalidDayOfWeekError, InvalidTimezoneError) as e:
-            console.print(f"[bold red]Validation Error:[/bold red] {e}")
-            raise typer.Exit(1)
-        except (BackupFileNotFoundError, BackupImportError) as e:
-            console.print(f"[bold red]Backup Error:[/bold red] {e}")
-            raise typer.Exit(1)
         except AutoMLTodolistError as e:
-            console.print(f"[bold red]Error:[/bold red] {e}")
-            raise typer.Exit(1)
+            error_style = "bold red"
+            console.print(f"Error: {e}", style=error_style)
         except Exception as e:
-            logger.exception("Unexpected error occurred")
-            console.print(f"[bold red]Unexpected Error:[/bold red] {e}")
-            raise typer.Exit(1)
+            logger.error("Unexpected error occurred", exc_info=True)
+            error_style = "bold red"
+            console.print(f"Unexpected Error: {e}", style=error_style)
     return wrapper
 
 @app.command()
@@ -274,65 +262,18 @@ def done(task_id: int):
 @app.command()
 @handle_errors
 def log():
-    """List all completed tasks in the current season."""
-    tasks = TaskService.get_completed_tasks()
-    season = SeasonService.get_current_season()
+    """List all completed tasks for the current season."""
+    active_season = SeasonService.get_current_season()
+    if not active_season:
+        raise NoActiveSeasonError("No active season found.")
 
-    table = Table(title=f"Completed Tasks for {season.name}")
-    table.add_column("ID", style="cyan", no_wrap=True)
-    table.add_column("DoW", style="white", no_wrap=True)
-    table.add_column("Project", style="yellow", no_wrap=True)
-    table.add_column("Task", style="magenta")
-    table.add_column("Finished At", style="green", no_wrap=True)
-    table.add_column("Time Taken", style="red", no_wrap=True)
-    table.add_column("Difficulty", style="blue", no_wrap=True)
-    table.add_column("LP Gain", style="green", no_wrap=True)
-    table.add_column("Reflection", style="white")
-
-    # Get the active season's timezone
-    season_timezone = gettz(season.timezone_string)
-    if season_timezone is None:
-        # Fallback if timezone string is invalid, though validation should prevent this
-        season_timezone = TimezoneService.get_current_timezone() 
-
-    for task in tasks:
-        finish_time_str = "N/A"
-        if task.finish_time:
-            # Convert UTC finish_time to the season's timezone for display
-            localized_finish_time = task.finish_time.astimezone(season_timezone)
-            finish_time_str = localized_finish_time.strftime("%Y-%m-%d %H:%M")
-        
-        time_taken = "N/A"
-        if task.time_taken_minutes is not None:
-            time_taken = f"{task.time_taken_minutes} min (manual)"
-        elif task.start_time and task.finish_time:
-            time_taken_delta = task.finish_time - task.start_time
-            time_taken = str(time_taken_delta).split(".")[0]
-
-        table.add_row(
-            str(task.id),
-            task.dow or "N/A",
-            task.project or "N/A",
-            task.task,
-            finish_time_str,
-            time_taken,
-            task.difficulty or "N/A",
-            str(task.lp_gain) if task.lp_gain is not None else "N/A",
-            task.reflection or "N/A",
-        )
-
+    console.print(f"Completed Tasks for {active_season.name}", style="bold cyan")
+    
+    table = TaskService.get_completed_tasks_table()
     console.print(table)
 
-    # Get LP status
-    status = StatusService.get_lp_status()
-
-    # Display LP status
-    console.print("\n[bold cyan]Current LP Status[/bold cyan]")
-    console.print(f"[bold green]Total LP Gain:[/bold green] {status['total_lp_gain']:.2f}")
-    console.print(f"[bold red]Total Decay:[/bold red] ({status['days_passed']} days * {status['daily_decay_rate']} LP/day) = {status['total_decay']:.2f}")
-    console.print(f"[bold yellow]Net Total LP:[/bold yellow] {status['net_total_lp']:.2f}")
-    console.print(f"--------------------")
-    console.print(f"[bold blue]Today's LP Gain:[/bold blue] {status['daily_lp_gain']:.2f}")
+    status_string = StatusService.get_status_string()
+    print(status_string)
 
 
 @app.command()
@@ -375,16 +316,9 @@ def update(
 @app.command()
 @handle_errors
 def status():
-    """Show LP status for the current season."""
-    status_data = StatusService.get_lp_status()
-
-    # Display
-    console.print(f"[bold cyan]Stats for season: {status_data['season_name']}[/bold cyan]")
-    console.print(f"[bold green]Total LP Gain:[/bold green] {status_data['total_lp_gain']:.2f}")
-    console.print(f"[bold red]Total Decay:[/bold red] ({status_data['days_passed']} days * {status_data['daily_decay_rate']} LP/day) = {status_data['total_decay']:.2f}")
-    console.print(f"[bold yellow]Net Total LP:[/bold yellow] {status_data['net_total_lp']:.2f}")
-    console.print(f"--------------------")
-    console.print(f"[bold blue]Today's LP Gain:[/bold blue] {status_data['daily_lp_gain']:.2f}")
+    """Show the current LP status for the active season."""
+    status_string = StatusService.get_status_string()
+    print(status_string)
 
 @analysis_app.command("plot-lp")
 @handle_errors
