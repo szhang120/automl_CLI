@@ -8,6 +8,12 @@ from dateutil.tz import gettz
 
 import pandas as pd
 import plotly.express as px
+import pmdarima as pm # Import pmdarima
+from sklearn.linear_model import LinearRegression # Import LinearRegression
+import numpy as np # Import numpy
+# from scipy.interpolate import UnivariateSpline # Import UnivariateSpline
+import warnings
+# from sklearn.utils.deprecation import is_deprecated # Import is_deprecated
 
 import panel as pn
 # import hvplot.pandas 
@@ -418,6 +424,16 @@ class TaskService:
         tasks = TaskService.get_completed_tasks()
         if not tasks:
             return pd.DataFrame()
+
+        # Get active season to access timezone for localizing naive datetimes.
+        active_season = SeasonService.get_current_season()
+        season_timezone = timezone.utc # Default to UTC if no season
+        if active_season and active_season.timezone_string:
+            try:
+                season_timezone = gettz(active_season.timezone_string)
+            except Exception:
+                logger.warning(f"Invalid timezone string '{active_season.timezone_string}'. Falling back to UTC.")
+                season_timezone = timezone.utc
         
         data = [
             {
@@ -429,9 +445,9 @@ class TaskService:
         df = pd.DataFrame(data)
         if 'finish_time' in df.columns:
             df['finish_time'] = pd.to_datetime(df['finish_time'])
-            # Ensure all timestamps are timezone-aware. Localize naive ones to UTC.
+            # Ensure all timestamps are timezone-aware. Localize naive ones to the season's timezone.
             df['finish_time'] = df['finish_time'].apply(
-                lambda x: x.tz_localize(timezone.utc) if pd.notna(x) and x.tzinfo is None else x
+                lambda x: x.tz_localize(season_timezone) if pd.notna(x) and x.tzinfo is None else x
             )
         return df
 
@@ -461,8 +477,13 @@ class TaskService:
         for task in tasks:
             finish_time_str = "N/A"
             if task.finish_time:
+                # Handle potentially naive datetimes before converting timezone
+                task_finish_time = task.finish_time
+                if task_finish_time.tzinfo is None:
+                    task_finish_time = task_finish_time.replace(tzinfo=season_timezone)
+
                 # Convert UTC finish_time to the season's timezone for display
-                localized_finish_time = task.finish_time.astimezone(season_timezone)
+                localized_finish_time = task_finish_time.astimezone(season_timezone)
                 finish_time_str = localized_finish_time.strftime("%Y-%m-%d %H:%M")
             
             time_taken = "N/A"
@@ -628,6 +649,19 @@ class TaskService:
             session.expunge(task)
             logger.info(f"Updated task: {task.task} (ID: {task_id})")
             return task
+    
+    @staticmethod
+    def delete_task(task_id: int):
+        """Delete a task by its ID."""
+        with get_db_session() as session:
+            task = session.query(Task).filter(Task.id == task_id).first()
+            
+            if not task:
+                raise TaskNotFoundError(task_id)
+            
+            session.delete(task)
+            session.commit()
+            logger.info(f"Deleted task: {task.task} (ID: {task_id})")
     
     @staticmethod
     def recalculate_all_lp() -> int:
@@ -899,96 +933,288 @@ class AnalysisService:
     @staticmethod
     def get_lp_timeseries_data() -> pd.DataFrame:
         """
-        Get a timeseries of cumulative net LP for the active season.
+        Get a timeseries of cumulative net LP, with data points for each event (task completion or decay).
         
         Returns:
-            pd.DataFrame: DataFrame with daily LP gain, decay, and cumulative net LP
+            pd.DataFrame: DataFrame with 'timestamp', 'lp_change', 'type', and 'cumulative_lp'.
         """
         active_season = SeasonService.get_current_season()
-        completed_tasks = TaskService.get_completed_tasks()
+        if not active_season:
+            return pd.DataFrame()
 
-        # Establish the season's specific timezone and day start hour
+        # Get season parameters
         season_tz_str = active_season.timezone_string
         season_timezone = gettz(season_tz_str)
         day_start_hour = active_season.day_start_hour
+        daily_decay = active_season.daily_decay
+        season_start_dt = active_season.start_date.astimezone(season_timezone)
 
-        if not completed_tasks:
-            return pd.DataFrame()
-            
-        # Create a DataFrame from tasks, adjusting finish_date for day_start_hour
-        data = []
+        # 1. Create a list of all LP-changing events
+        events = []
+        
+        # Add an initial event for the season start
+        events.append({
+            'timestamp': season_start_dt,
+            'lp_change': 0.0,
+            'type': 'season_start'
+        })
+        
+        # 2. Add task completion events
+        completed_tasks = TaskService.get_completed_tasks()
         for task in completed_tasks:
             if task.finish_time and task.lp_gain is not None:
-                # Localize task finish time to season's timezone
-                task_finish_time_in_season_tz = task.finish_time.astimezone(season_timezone)
+                # Ensure finish_time is timezone-aware
+                finish_time = task.finish_time
+                if finish_time.tzinfo is None:
+                    # Assume season timezone for naive datetimes
+                    finish_time = finish_time.replace(tzinfo=season_timezone)
                 
-                # Determine the LP day for this task's finish time
-                task_lp_day = task_finish_time_in_season_tz.date()
-                if task_finish_time_in_season_tz.time() < time(day_start_hour):
-                    task_lp_day = (task_finish_time_in_season_tz - timedelta(days=1)).date()
-                
-                data.append({
-                    'finish_date': task_lp_day,
-                    'lp_gain': task.lp_gain
+                events.append({
+                    'timestamp': finish_time.astimezone(season_timezone),
+                    'lp_change': task.lp_gain,
+                    'type': 'gain'
                 })
+
+        # 3. Add decay events
+        now_in_season_tz = datetime.now(season_timezone)
         
-        df = pd.DataFrame(data)
+        # Determine the first decay point for the season
+        first_decay_point = datetime.combine(season_start_dt.date(), time(day_start_hour), tzinfo=season_timezone)
+        if first_decay_point < season_start_dt:
+            first_decay_point += timedelta(days=1)
         
-        if df.empty:
+        current_decay_point = first_decay_point
+        while current_decay_point <= now_in_season_tz:
+            events.append({
+                'timestamp': current_decay_point,
+                'lp_change': -daily_decay,
+                'type': 'decay'
+            })
+            current_decay_point += timedelta(days=1)
+
+        if not events or len(events) < 2:
             return pd.DataFrame()
 
-        # Group by day and sum LP gains
-        daily_lp = df.groupby('finish_date')['lp_gain'].sum().reset_index()
-        daily_lp = daily_lp.rename(columns={'finish_date': 'date', 'lp_gain': 'daily_lp_gain'})
+        # 4. Create DataFrame, sort, and calculate cumulative LP
+        df = pd.DataFrame(events)
+        df = df.sort_values(by='timestamp').reset_index(drop=True)
+        df['cumulative_lp'] = df['lp_change'].cumsum()
         
-        # Ensure 'date' column is in datetime format for merging
-        daily_lp['date'] = pd.to_datetime(daily_lp['date'])
-        
-        # Create a full date range for the season
-        start_date = min(daily_lp['date'])
-        end_date = max(daily_lp['date'])
-        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
-        
-        # Create a DataFrame for the full date range
-        season_df = pd.DataFrame(date_range, columns=['date'])
-        
-        # Merge daily LP gains with the full date range
-        season_df = pd.merge(season_df, daily_lp, on='date', how='left').fillna(0)
-        
-        # Calculate daily decay and cumulative LP
-        season_df['daily_decay'] = active_season.daily_decay
-        season_df['net_daily_lp'] = season_df['daily_lp_gain'] - season_df['daily_decay']
-        season_df['cumulative_net_lp'] = season_df['net_daily_lp'].cumsum()
-        
-        # Set date as index for cleaner plotting
-        season_df = season_df.set_index('date')
-        
-        return season_df
+        return df
         
     @staticmethod
-    def plot_lp_timeseries_plotly(save_png: bool = False, filename="lp_plot.png"):
+    def _fit_and_forecast_sarimax(series: pd.Series, forecast_steps: int = 7) -> pd.Series:
         """
-        Generate and either serve or save a Plotly plot.
+        Fits a SARIMAX model and generates a forecast.
+        
+        Args:
+            series: The time series data (cumulative LP).
+            forecast_steps: Number of steps to forecast into the future.
+            
+        Returns:
+            pd.Series: Forecasted values with corresponding timestamps.
+        """
+        # Resample to daily frequency, filling missing days with the last known value (forward fill)
+        # This is important for SARIMAX which expects regular time intervals.
+        daily_series = series.resample('D').ffill().fillna(method='bfill') # Handle NaNs at start/end
+        
+        # Use auto_arima to find the best SARIMAX parameters
+        # m=7 for weekly seasonality (7 days in a week)
+        # suppress_warnings=True to keep output clean
+        # stepwise=True for faster search
+        
+        # If not enough data for meaningful seasonal analysis, disable seasonal fitting
+        seasonal_arg = True
+        if len(daily_series) < 14: # Less than two full weeks of daily data
+            seasonal_arg = False
+            logger.warning("Insufficient data for seasonal SARIMAX. Fitting non-seasonal model.")
+
+        if len(daily_series) < 2: # Not enough data even for non-seasonal model
+            logger.warning("Very limited data. Cannot fit SARIMAX model. Returning last known LP as forecast.")
+            # Return a simple flat forecast based on the last known value
+            last_lp = series.iloc[-1] if not series.empty else 0.0
+            last_date = series.index[-1] if not series.empty else datetime.now(timezone.utc) # Fallback if series is empty
+            forecast_index = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=forecast_steps, freq='D')
+            return pd.Series(last_lp, index=forecast_index)
+
+        # Temporarily suppress the specific FutureWarning from sklearn about 'force_all_finite'
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning, module=r'sklearn\.utils\.deprecation', message=".*force_all_finite.*")
+            model = pm.auto_arima(daily_series,
+                                  seasonal=seasonal_arg, m=7,
+                                  suppress_warnings=True,
+                                  stepwise=True)
+        
+        # Generate forecast
+        forecast_values = model.predict(n_periods=forecast_steps)
+        
+        # Create a date range for the forecast
+        last_date = daily_series.index[-1]
+        forecast_index = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=forecast_steps, freq='D')
+        forecast_series = pd.Series(forecast_values, index=forecast_index)
+        
+        # Prepend the last actual data point to the forecast for smooth plotting
+        full_forecast_index = daily_series.index[-1:].union(forecast_index)
+        full_forecast_values = np.concatenate(([daily_series.iloc[-1]], forecast_values))
+        full_forecast_series = pd.Series(full_forecast_values, index=full_forecast_index)
+        
+        return full_forecast_series
+        
+    @staticmethod
+    def _fit_and_predict_linear_regression(df: pd.DataFrame, forecast_steps: int = 0) -> pd.Series:
+        """
+        Fits a linear regression model to cumulative LP data and generates predictions.
+        
+        Args:
+            df: DataFrame containing 'timestamp' and 'cumulative_lp'.
+            forecast_steps: Number of steps to forecast into the future.
+            
+        Returns:
+            pd.Series: Predicted LP values with corresponding timestamps.
+        """
+        if df.empty or len(df) < 2:
+            logger.warning("Insufficient data for linear regression. Returning empty series.")
+            return pd.Series()
+
+        # Convert timestamps to numerical values (e.g., seconds since epoch)
+        X_hist = (df['timestamp'].astype(np.int64) // 10**9).values.reshape(-1, 1)
+        y_hist = df['cumulative_lp'].values
+        
+        model = LinearRegression()
+        model.fit(X_hist, y_hist)
+        
+        if forecast_steps > 0:
+            last_timestamp = df['timestamp'].max()
+            # Generate future timestamps (daily frequency)
+            future_timestamps = pd.date_range(start=last_timestamp + pd.Timedelta(days=1), periods=forecast_steps, freq='D')
+            X_future = (future_timestamps.astype(np.int64) // 10**9).values.reshape(-1, 1)
+            
+            # Combine historical and future X for prediction
+            X_full = np.concatenate((X_hist, X_future))
+            timestamps_full = pd.concat([df['timestamp'], pd.Series(future_timestamps)])
+        else:
+            X_full = X_hist
+            timestamps_full = df['timestamp']
+
+        predictions = model.predict(X_full)
+        return pd.Series(predictions, index=timestamps_full)
+
+    # @staticmethod
+    # def _fit_and_predict_spline(df: pd.DataFrame, forecast_steps: int = 0) -> pd.Series:
+    #     """
+    #     Fits a univariate spline model to cumulative LP data and generates predictions.
+    #     
+    #     Args:
+    #         df: DataFrame containing 'timestamp' and 'cumulative_lp'.
+    #         forecast_steps: Number of steps to forecast into the future.
+    #         
+    #     Returns:
+    #         pd.Series: Predicted LP values with corresponding timestamps.
+    #     """
+    #     if df.empty or len(df) < 2:
+    #         logger.warning("Insufficient data for spline regression. Returning empty series.")
+    #         return pd.Series()
+
+    #     # Convert timestamps to numerical values (e.g., seconds since epoch)
+    #     x_hist = (df['timestamp'].astype(np.int64) // 10**9).values
+    #     y_hist = df['cumulative_lp'].values
+
+    #     try:
+    #         spl = UnivariateSpline(x_hist, y_hist, k=3)
+            
+    #         if forecast_steps > 0:
+    #             last_timestamp = df['timestamp'].max()
+    #             # Generate future timestamps (daily frequency)
+    #             future_timestamps = pd.date_range(start=last_timestamp + pd.Timedelta(days=1), periods=forecast_steps, freq='D')
+    #             x_future = (future_timestamps.astype(np.int64) // 10**9).values
+                
+    #             # Combine historical and future x for prediction
+    #             x_full = np.concatenate((x_hist, x_future))
+    #             timestamps_full = pd.concat([df['timestamp'], pd.Series(future_timestamps)])
+    #         else:
+    #             x_full = x_hist
+    #             timestamps_full = df['timestamp']
+
+    #         predictions = spl(x_full)
+    #     except Exception as e:
+    #         logger.error(f"Error fitting spline: {e}")
+    #         return pd.Series() # Return empty on error
+        
+    #     return pd.Series(predictions, index=timestamps_full)
+
+    @staticmethod
+    def plot_lp_timeseries_plotly(save_png: bool = False, filename="lp_plot.png", 
+                                  include_forecast: bool = False, include_linear_regression: bool = False,
+                                  # include_spline: bool = False, 
+                                  forecast_steps: int = 7):
+        """
+        Generate and either serve or save a Plotly plot of LP over time.
+        Can include a SARIMAX forecast, a linear regression line, and/or a spline fit.
         """
         lp_df = AnalysisService.get_lp_timeseries_data()
         
-        if lp_df.empty or len(lp_df) < 2:
+        if lp_df.empty:
             print("Not enough data to plot.")
             return
 
         fig = px.line(
             lp_df,
-            x=lp_df.index,
-            y='cumulative_net_lp',
+            x='timestamp',
+            y='cumulative_lp',
             title='Cumulative Net LP Over Time',
-            labels={'date': 'Date', 'cumulative_net_lp': 'Cumulative Net LP'}
+            labels={'timestamp': 'Timestamp', 'cumulative_lp': 'Cumulative Net LP'},
+            markers=True # Add markers for each event
         )
+        
+        max_x_axis_date = lp_df['timestamp'].max()
+
+        if include_forecast:
+            # Need to create a Series with a DatetimeIndex for auto_arima
+            lp_series_for_arima = lp_df.set_index('timestamp')['cumulative_lp']
+            forecast_series = AnalysisService._fit_and_forecast_sarimax(lp_series_for_arima, forecast_steps=forecast_steps)
+            
+            # Add forecast to the plot
+            fig.add_scatter(
+                x=forecast_series.index,
+                y=forecast_series.values,
+                mode='lines',
+                name='SARIMAX Forecast',
+                line=dict(dash='dash', color='red')
+            )
+            # Update max_x_axis_date to include forecast range
+            max_x_axis_date = max(max_x_axis_date, forecast_series.index.max())
+
+        if include_linear_regression:
+            linear_regression_series = AnalysisService._fit_and_predict_linear_regression(lp_df, forecast_steps=forecast_steps)
+            if not linear_regression_series.empty:
+                fig.add_scatter(
+                    x=linear_regression_series.index,
+                    y=linear_regression_series.values,
+                    mode='lines',
+                    name='Linear Regression',
+                    line=dict(color='goldenrod', dash='dot') # Changed from green to goldenrod
+                )
+            # Update max_x_axis_date to include forecast range
+            max_x_axis_date = max(max_x_axis_date, linear_regression_series.index.max() if not linear_regression_series.empty else max_x_axis_date)
+
+        # if include_spline:
+        #     spline_series = AnalysisService._fit_and_predict_spline(lp_df, forecast_steps=forecast_steps)
+        #     if not spline_series.empty:
+        #         fig.add_scatter(
+        #             x=spline_series.index,
+        #             y=spline_series.values,
+        #             mode='lines',
+        #             name='Spline Fit',
+        #             line=dict(color='teal', dash='dashdot') # Changed from purple to teal
+        #         )
+        #     # Update max_x_axis_date to include forecast range
+        #     max_x_axis_date = max(max_x_axis_date, spline_series.index.max() if not spline_series.empty else max_x_axis_date)
         
         fig.update_layout(
             template="plotly_white",
-            xaxis=dict(tickformat="%Y-%m-%d"),
+            xaxis=dict(tickformat="%Y-%m-%d %H:%M", range=[lp_df['timestamp'].min(), max_x_axis_date]),
             yaxis=dict(gridcolor='lightgrey'),
-            xaxis_title="Date",
+            xaxis_title="Timestamp",
             yaxis_title="Cumulative Net LP",
         )
         

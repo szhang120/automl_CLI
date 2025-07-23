@@ -324,18 +324,48 @@ def status():
 @handle_errors
 def plot_lp(
     save_png: bool = typer.Option(False, "--save-png", "-s", help="Save the plot as a PNG file instead of serving it."),
-    filename: str = typer.Option("lp_plot.png", "--filename", "-f", help="Filename for the saved PNG plot.")
+    filename: str = typer.Option("lp_plot.png", "--filename", "-f", help="Filename for the saved PNG plot."),
+    include_forecast: bool = typer.Option(True, "--forecast", "-F", help="Include SARIMAX forecast in the plot."),
+    include_linear_regression: bool = typer.Option(True, "--linear-regression", "--lr", "-R", help="Include linear regression in the plot."),
+    # include_spline: bool = typer.Option(True, "--spline", "-S", help="Include auto-fit spline in the plot."),
+    forecast_days: int = typer.Option(2, "--forecast-days", "-D", help="Number of days to forecast into the future for all models.")
 ):
     """Generate and serve a plot of cumulative net LP over time."""
     from .services import AnalysisService
     
     if save_png:
         console.print(f"[bold green]Generating and saving plot to {filename}...[/bold green]")
-        AnalysisService.plot_lp_timeseries_plotly(save_png=True, filename=filename)
+        AnalysisService.plot_lp_timeseries_plotly(save_png=True, filename=filename, 
+                                                  include_forecast=include_forecast, 
+                                                  include_linear_regression=include_linear_regression, 
+                                                  # include_spline=include_spline, 
+                                                  forecast_steps=forecast_days)
     else:
         console.print("[bold green]Generating and serving interactive plot...[/bold green]")
-        AnalysisService.plot_lp_timeseries_plotly()
+        AnalysisService.plot_lp_timeseries_plotly(include_forecast=include_forecast, 
+                                                  include_linear_regression=include_linear_regression, 
+                                                  # include_spline=include_spline, 
+                                                  forecast_steps=forecast_days)
         console.print("[bold blue]Plot server started. Check your browser.[/bold blue]")
+
+
+@app.command("delete")
+@handle_errors
+def delete_task(
+    task_id: int = typer.Argument(..., help="The ID of the task to delete."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Bypass the confirmation prompt."),
+):
+    """Delete a task by its ID."""
+    task = TaskService.get_task(task_id) # First, fetch to confirm it exists
+    
+    if not yes:
+        console.print(f"[bold red]You are about to delete task {task.id}: '{task.task}'. This cannot be undone.[/bold red]")
+        if not typer.confirm("Are you sure you want to delete this task?"):
+            raise typer.Abort()
+            
+    TaskService.delete_task(task_id)
+    console.print(f"[bold green]Successfully deleted task {task_id}.[/bold green]")
+
 
 if __name__ == "__main__":
     app() 
