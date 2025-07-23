@@ -1,6 +1,6 @@
 # AutoML TodoList CLI
 
-A powerful, command-line to-do list application for detailed life and task tracking, inspired by a comprehensive Google Sheet.
+A powerful, command-line to-do list application for detailed life and task tracking.
 
 ## Features
 
