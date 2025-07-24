@@ -10,7 +10,7 @@ from dateutil.tz import gettz
 from .database import init_database
 from .services import (
     SeasonService, TaskService, StatusService, TimezoneService, 
-    BackupService, ValidationService
+    BackupService, ValidationService, AnalysisService
 )
 from .exceptions import (
     AutoMLTodolistError, NoActiveSeasonError, TaskNotFoundError, 
@@ -26,10 +26,12 @@ logger = logging.getLogger(__name__)
 app = typer.Typer(help="AutoML TodoList CLI - A powerful task management tool")
 season_app = typer.Typer(help="Season management commands")
 backup_app = typer.Typer(help="Backup and restore commands")
-analysis_app = typer.Typer(help="Data analysis commands")
+# analysis_app = typer.Typer(help="Data analysis commands") # This will be removed as plot-lp is moved
+
 app.add_typer(season_app, name="season")
 app.add_typer(backup_app, name="backup")
-app.add_typer(analysis_app, name="analysis")
+# app.add_typer(analysis_app, name="analysis") # Removed
+
 
 # Rich console for beautiful output
 console = Console()
@@ -151,7 +153,7 @@ def season_set_day_start_hour(hour: int = typer.Argument(..., min=0, max=23, hel
         raise typer.Exit(1)
 
 
-@season_app.command("recalculate-lp")
+@season_app.command("recalculate-lp") # Moved back to season_app
 @handle_errors
 def season_recalculate_lp(
     yes: bool = typer.Option(False, "--yes", "-y", help="Bypass the confirmation prompt."),
@@ -203,10 +205,11 @@ def backup_import(
 def add(
     task: str,
     project: Optional[str] = typer.Option(None, "--project", "-p"),
-    difficulty: Optional[int] = typer.Option(None, "--difficulty", "-d"),
-    dow: Optional[int] = typer.Option(None, "--dow", help="Day of the week (e.g., '1' for Monday)."),
-    duration: Optional[int] = typer.Option(None, "--duration", help="Manually set time taken in minutes."),
-    completed: bool = typer.Option(False, "--completed", "-C", help="Mark the task as completed upon creation."),
+    difficulty: Optional[int] = typer.Option(None, "--difficulty", "-d", min=1, max=5, help="Difficulty level (1-5)."),
+    dow: Optional[int] = typer.Option(None, "--dow", min=0, max=6, help="Day of week (0-6, or Mon, Tue, etc.)."),
+    duration: Optional[int] = typer.Option(None, "--duration", "-m", help="Manual duration in minutes for a completed task."),
+    finish_time: Optional[str] = typer.Option(None, "--finish-time", "-f", help="Specify a historical finish time (YYYY-MM-DD HH:MM:SS) if --completed is used."),
+    completed: bool = typer.Option(False, "--completed", "-C", help="Mark the task as completed immediately."),
 ):
     """Add a new task to the active season."""
     new_task = TaskService.create_task(
@@ -215,7 +218,8 @@ def add(
         difficulty=difficulty,
         dow=dow,
         duration=duration,
-        completed=completed
+        completed=completed,
+        finish_time_str=finish_time
     )
     
     if completed:
@@ -298,7 +302,7 @@ def update(
     project: Optional[str] = typer.Option(None, "--project", "-p"),
     difficulty: Optional[int] = typer.Option(None, "--difficulty", "-d"),
     dow: Optional[int] = typer.Option(None, "--dow", help="Day of the week (e.g., '0' for Sunday)."),
-    duration: Optional[int] = typer.Option(None, "--duration", help="Manually set time taken in minutes."),
+    duration: Optional[int] = typer.Option(None, "--duration", "-m", help="New manual duration in minutes."),
     reflection: Optional[str] = typer.Option(None, "--reflection", "-r"),
 ):
     """Update a task in the current season."""
@@ -320,14 +324,13 @@ def status():
     status_string = StatusService.get_status_string()
     print(status_string)
 
-@analysis_app.command("plot-lp")
+@app.command("plot") # Changed from @analysis_app.command("plot-lp")
 @handle_errors
 def plot_lp(
-    save_png: bool = typer.Option(False, "--save-png", "-s", help="Save the plot as a PNG file instead of serving it."),
+    save_png: bool = typer.Option(False, "--save-png", "-s", help="Save the plot as a PNG image file instead of serving it."),
     filename: str = typer.Option("lp_plot.png", "--filename", "-f", help="Filename for the saved PNG plot."),
     include_forecast: bool = typer.Option(True, "--forecast", "-F", help="Include SARIMAX forecast in the plot."),
     include_linear_regression: bool = typer.Option(True, "--linear-regression", "--lr", "-R", help="Include linear regression in the plot."),
-    # include_spline: bool = typer.Option(True, "--spline", "-S", help="Include auto-fit spline in the plot."),
     forecast_days: int = typer.Option(2, "--forecast-days", "-D", help="Number of days to forecast into the future for all models.")
 ):
     """Generate and serve a plot of cumulative net LP over time."""
@@ -338,13 +341,11 @@ def plot_lp(
         AnalysisService.plot_lp_timeseries_plotly(save_png=True, filename=filename, 
                                                   include_forecast=include_forecast, 
                                                   include_linear_regression=include_linear_regression, 
-                                                  # include_spline=include_spline, 
                                                   forecast_steps=forecast_days)
     else:
         console.print("[bold green]Generating and serving interactive plot...[/bold green]")
         AnalysisService.plot_lp_timeseries_plotly(include_forecast=include_forecast, 
                                                   include_linear_regression=include_linear_regression, 
-                                                  # include_spline=include_spline, 
                                                   forecast_steps=forecast_days)
         console.print("[bold blue]Plot server started. Check your browser.[/bold blue]")
 

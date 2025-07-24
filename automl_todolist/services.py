@@ -338,7 +338,8 @@ class TaskService:
         difficulty: Optional[int] = None,
         dow: Optional[int] = None,
         duration: Optional[int] = None,
-        completed: bool = False
+        completed: bool = False,
+        finish_time_str: Optional[str] = None # New parameter for historical finish time
     ) -> Task:
         """
         Create a new task.
@@ -367,6 +368,21 @@ class TaskService:
             active_season = SeasonService.get_active_season(session)
             now = datetime.now(_current_timezone)
             
+            task_finish_time = None
+            if completed:
+                if finish_time_str:
+                    try:
+                        # Parse the provided string as naive datetime, then localize to season's timezone
+                        naive_dt = datetime.strptime(finish_time_str, "%Y-%m-%d %H:%M:%S")
+                        # Ensure the season timezone is obtained for localization
+                        season_timezone_obj = gettz(active_season.timezone_string) if active_season.timezone_string else _current_timezone
+                        task_finish_time = naive_dt.replace(tzinfo=season_timezone_obj)
+                    except ValueError as e:
+                        logger.error(f"Invalid finish time format '{finish_time_str}': {e}. Using current time.")
+                        task_finish_time = now # Fallback to current time on error
+                else:
+                    task_finish_time = now
+
             new_task = Task(
                 task=task_description,
                 project=project,
@@ -374,7 +390,7 @@ class TaskService:
                 dow=dow_str,
                 time_taken_minutes=duration,
                 completed=completed,
-                finish_time=now if completed else None,
+                finish_time=task_finish_time,
                 created_at=now,
                 season_id=active_season.id
             )

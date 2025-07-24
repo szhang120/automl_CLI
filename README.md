@@ -179,19 +179,22 @@ This set of commands allows you to visualize your productivity and LP trends ove
 
 #### `analysis plot-lp`
 
-Generates a plot of your cumulative net LP for the current season. By default, it launches an interactive plot in your web browser.
+Generates a plot of your cumulative net LP for the current season. By default, it launches an interactive plot in your web browser and includes SARIMAX forecast and linear regression lines.
 
 - **Usage:** `todo analysis plot-lp [OPTIONS]`
 - **Options:**
     - `--save-png` or `-s`: Save the plot as a PNG image file instead of opening it in a browser.
     - `--filename` or `-f`: Specify the filename for the saved PNG image (default: `lp_plot.png`).
-- **Example (interactive plot):**
+    - `--forecast` or `-F`: Include SARIMAX forecast in the plot (enabled by default).
+    - `--linear-regression` or `--lr` or `-R`: Include linear regression in the plot (enabled by default).
+    - `--forecast-days` or `-D`: Number of days to forecast into the future for all models (default: 2).
+- **Example (interactive plot with all defaults):**
     ```bash
     todo analysis plot-lp
     ```
-- **Example (saving to a file):**
+- **Example (saving to a file without forecast):**
     ```bash
-    todo analysis plot-lp --save-png --filename my_progress.png
+    todo analysis plot-lp --save-png --filename my_progress.png --no-forecast
     ```
 
 ---
@@ -280,13 +283,6 @@ Updates any attribute of a task, whether it is active or complete.
     - `--dow`: Change the Day of Week. You can provide a number (0-6, Sunday-Saturday) which will be stored as an abbreviation (e.g., 'Sun'), or provide a string which will be stored as-is.
     - `--duration`: Manually set the time taken in minutes for a task.
     - `--reflection` or `-r`: Add or change your reflection on the task.
-- **LP Calculation:** `lp_gain` is calculated whenever a task with a set difficulty is completed or updated. The base points for each difficulty are:
-    - `Easy`: 1 LP
-    - `Easy-Med`: 2 LP
-    - `Med`: 4 LP
-    - `Med-Hard`: 8 LP
-    - `Hard`: 16 LP
-    The final `lp_gain` is then calculated by multiplying the base points by the duration of the task in hours, rounded to the nearest 15-minute interval. For example, a "Hard" task that took 40 minutes would be rounded to 45 minutes, earning `16 * (45 / 60) = 12 LP`.
 ---
 
 ### `log`
