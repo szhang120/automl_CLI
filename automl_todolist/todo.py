@@ -9,7 +9,7 @@ from dateutil.tz import gettz
 
 from .database import init_database
 from .services import (
-    SeasonService, TaskService, StatusService, TimezoneService, 
+    SeasonService, TaskService, StatusService, 
     BackupService, ValidationService, AnalysisService
 )
 from .exceptions import (
@@ -35,6 +35,7 @@ app.add_typer(backup_app, name="backup")
 
 # Rich console for beautiful output
 console = Console()
+
 
 
 def handle_errors(func):
@@ -133,7 +134,7 @@ def season_set_timezone(tz_string: str):
     The timezone string should be a valid IANA Time Zone Database name,
     e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo', or 'UTC'.
     """
-    TimezoneService.set_timezone(tz_string)
+    SeasonService.set_timezone(tz_string)
     console.print(f"[bold green]Timezone set to:[/bold green] {tz_string}")
 
 @season_app.command("set-day-start-hour")
@@ -205,9 +206,9 @@ def backup_import(
 def add(
     task: str,
     project: Optional[str] = typer.Option(None, "--project", "-p"),
-    difficulty: Optional[int] = typer.Option(None, "--difficulty", "-d", min=1, max=5, help="Difficulty level (1-5)."),
-    dow: Optional[int] = typer.Option(None, "--dow", min=0, max=6, help="Day of week (0-6, or Mon, Tue, etc.)."),
-    duration: Optional[int] = typer.Option(None, "--duration", "-m", help="Manual duration in minutes for a completed task."),
+    level: Optional[int] = typer.Option(None, "--level", "-l", min=1, max=5, help="Difficulty level (1-5)."),
+    # day: Optional[int] = typer.Option(None, "--day", "-d", min=0, max=6, help="Day of week (0-6, or Mon, Tue, etc.)."), # Removed
+    minutes: Optional[int] = typer.Option(None, "--minutes", "-m", help="Manual duration in minutes for a completed task."),
     finish_time: Optional[str] = typer.Option(None, "--finish-time", "-f", help="Specify a historical finish time (YYYY-MM-DD HH:MM:SS) if --completed is used."),
     completed: bool = typer.Option(False, "--completed", "-C", help="Mark the task as completed immediately."),
 ):
@@ -215,9 +216,9 @@ def add(
     new_task = TaskService.create_task(
         task_description=task,
         project=project,
-        difficulty=difficulty,
-        dow=dow,
-        duration=duration,
+        difficulty=level,
+        # dow=day, # Removed
+        duration=minutes,
         completed=completed,
         finish_time_str=finish_time
     )
@@ -277,7 +278,7 @@ def log():
     console.print(table)
 
     status_string = StatusService.get_status_string()
-    print(status_string)
+    console.print(status_string)
 
 
 @app.command()
@@ -298,21 +299,21 @@ def stop(task_id: int):
 @handle_errors
 def update(
     task_id: int,
-    new_task_name: Optional[str] = typer.Option(None, "--task", "-t"),
-    project: Optional[str] = typer.Option(None, "--project", "-p"),
-    difficulty: Optional[int] = typer.Option(None, "--difficulty", "-d"),
-    dow: Optional[int] = typer.Option(None, "--dow", help="Day of the week (e.g., '0' for Sunday)."),
-    duration: Optional[int] = typer.Option(None, "--duration", "-m", help="New manual duration in minutes."),
-    reflection: Optional[str] = typer.Option(None, "--reflection", "-r"),
+    new_task_name: Optional[str] = typer.Option(None, "--task", "-t", help="New description of the task."),
+    project: Optional[str] = typer.Option(None, "--project", "-p", help="New project or category."),
+    level: Optional[int] = typer.Option(None, "--level", "-l", min=1, max=5, help="New difficulty level (1-5)."),
+    # day: Optional[int] = typer.Option(None, "--day", "-d", min=0, max=6, help="New Day of Week (0-6, or Mon, Tue, etc.)."), # Removed
+    minutes: Optional[int] = typer.Option(None, "--minutes", "-m", help="New manual duration in minutes."),
+    reflection: Optional[str] = typer.Option(None, "--reflection", "-r", help="New reflection notes."),
 ):
     """Update a task in the current season."""
     task_obj = TaskService.update_task(
         task_id=task_id,
         task_description=new_task_name,
         project=project,
-        difficulty=difficulty,
-        dow=dow,
-        duration=duration,
+        difficulty=level,
+        # dow=day, # Removed
+        duration=minutes,
         reflection=reflection
     )
     console.print(f"[bold green]Updated task:[/bold green] {task_obj.task}")
@@ -322,7 +323,7 @@ def update(
 def status():
     """Show the current LP status for the active season."""
     status_string = StatusService.get_status_string()
-    print(status_string)
+    console.print(status_string)
 
 @app.command("plot") # Changed from @analysis_app.command("plot-lp")
 @handle_errors

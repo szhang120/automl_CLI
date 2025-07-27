@@ -45,7 +45,7 @@ from .exceptions import (
 logger = logging.getLogger(__name__)
 
 # Global timezone state (managed through service methods)
-_current_timezone = DEFAULT_TIMEZONE
+# _current_timezone = DEFAULT_TIMEZONE # REMOVED
 
 
 class ValidationService:
@@ -119,7 +119,7 @@ class LPCalculationService:
     """Service for Life Points calculations."""
     
     @staticmethod
-    def calculate_lp_gain(task: Task) -> Optional[float]:
+    def calculate_lp_gain(task: Task, season_timezone: Any) -> Optional[float]:
         """
         Calculate LP gain based on difficulty and duration.
         
@@ -144,9 +144,9 @@ class LPCalculationService:
 
             # If a datetime object loaded from DB is naive, assume it's in the application's current timezone
             if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=_current_timezone)
+                start_dt = start_dt.replace(tzinfo=season_timezone)
             if finish_dt.tzinfo is None:
-                finish_dt = finish_dt.replace(tzinfo=_current_timezone)
+                finish_dt = finish_dt.replace(tzinfo=season_timezone)
 
             # Convert both to UTC before subtraction to avoid offset issues if timezones were different
             start_dt_utc = start_dt.astimezone(timezone.utc)
@@ -197,7 +197,7 @@ class SeasonService:
             Newly created season
         """
         with get_db_session() as session:
-            now = datetime.now(_current_timezone)
+            now = datetime.now(timezone.utc) # Use UTC for consistency
             
             # Deactivate old season
             try:
@@ -209,12 +209,17 @@ class SeasonService:
             except NoActiveSeasonError:
                 logger.info("No active season to deactivate")
             
-            # Create new season
+            # Create new season using system's local timezone as default
+            system_tz = gettz()
+            if not system_tz:
+                system_tz = gettz("UTC") # Fallback
+            now = datetime.now(system_tz)
+
             new_season = Season(
                 name=name, 
                 is_active=True, 
                 start_date=now,
-                timezone_string=_current_timezone.key if hasattr(_current_timezone, 'key') else str(_current_timezone),
+                timezone_string=str(system_tz),
                 day_start_hour=0 # Default to midnight
             )
             session.add(new_season)
@@ -300,6 +305,30 @@ class SeasonService:
             return season
 
     @staticmethod
+    def set_timezone(timezone_string: str) -> Season:
+        """Set the timezone for the active season."""
+        ValidationService.validate_timezone(timezone_string)
+        with get_db_session() as session:
+            active_season = SeasonService.get_active_season(session)
+            active_season.timezone_string = timezone_string
+            session.add(active_season)
+            session.flush()
+            session.refresh(active_season)
+            session.expunge(active_season)
+            logger.info(f"Set timezone to {timezone_string} for season: {active_season.name}")
+            return active_season
+
+    @staticmethod
+    def get_active_season_timezone() -> Any:
+        """Get the timezone object for the currently active season."""
+        with get_db_session() as session:
+            active_season = SeasonService.get_active_season(session)
+            if not active_season.timezone_string:
+                logger.warning(f"Season '{active_season.name}' has no timezone set. Defaulting to UTC.")
+                return gettz("UTC")
+            return ValidationService.validate_timezone(active_season.timezone_string)
+
+    @staticmethod
     def set_day_start_hour(hour: int) -> Season:
         """
         Set the custom day start hour for the active season.
@@ -336,10 +365,10 @@ class TaskService:
         task_description: str,
         project: Optional[str] = None,
         difficulty: Optional[int] = None,
-        dow: Optional[int] = None,
+        # dow: Optional[int] = None, # No longer needed, will be auto-detected
         duration: Optional[int] = None,
         completed: bool = False,
-        finish_time_str: Optional[str] = None # New parameter for historical finish time
+        finish_time_str: Optional[str] = None
     ) -> Task:
         """
         Create a new task.
@@ -348,7 +377,7 @@ class TaskService:
             task_description: Description of the task
             project: Project or category
             difficulty: Difficulty level (1-5)
-            dow: Day of week (0-6)
+            # dow: Day of week (0-6)
             duration: Manual duration in minutes
             completed: Whether task is completed
             
@@ -362,26 +391,26 @@ class TaskService:
         """
         # Validate inputs
         difficulty_str = ValidationService.validate_and_convert_difficulty(difficulty)
-        dow_str = ValidationService.validate_and_convert_dow(dow)
         
         with get_db_session() as session:
             active_season = SeasonService.get_active_season(session)
-            now = datetime.now(_current_timezone)
+            season_tz = ValidationService.validate_timezone(active_season.timezone_string)
+            now = datetime.now(season_tz)
             
             task_finish_time = None
             if completed:
                 if finish_time_str:
                     try:
-                        # Parse the provided string as naive datetime, then localize to season's timezone
                         naive_dt = datetime.strptime(finish_time_str, "%Y-%m-%d %H:%M:%S")
-                        # Ensure the season timezone is obtained for localization
-                        season_timezone_obj = gettz(active_season.timezone_string) if active_season.timezone_string else _current_timezone
-                        task_finish_time = naive_dt.replace(tzinfo=season_timezone_obj)
+                        task_finish_time = naive_dt.replace(tzinfo=season_tz)
                     except ValueError as e:
                         logger.error(f"Invalid finish time format '{finish_time_str}': {e}. Using current time.")
                         task_finish_time = now # Fallback to current time on error
                 else:
                     task_finish_time = now
+
+            # DoW is based on created_at time. It will be updated if the task is started later.
+            dow_str = now.strftime('%a')
 
             new_task = Task(
                 task=task_description,
@@ -397,7 +426,7 @@ class TaskService:
             
             # Calculate LP if completed
             if completed:
-                new_task.lp_gain = LPCalculationService.calculate_lp_gain(new_task)
+                new_task.lp_gain = LPCalculationService.calculate_lp_gain(new_task, season_tz)
             
             session.add(new_task)
             session.flush()
@@ -488,7 +517,7 @@ class TaskService:
         season_timezone = gettz(active_season.timezone_string)
         if season_timezone is None:
             # Fallback if timezone string is invalid, though validation should prevent this
-            season_timezone = TimezoneService.get_current_timezone() 
+            season_timezone = SeasonService.get_active_season_timezone() 
 
         for task in tasks:
             finish_time_str = "N/A"
@@ -562,7 +591,9 @@ class TaskService:
             if not task:
                 raise TaskNotFoundError(task_id)
             
-            task.start_time = datetime.now(_current_timezone)
+            season_tz = ValidationService.validate_timezone(active_season.timezone_string)
+            task.start_time = datetime.now(season_tz)
+            task.dow = task.start_time.strftime('%a') # Set/update dow on start
             session.add(task)
             session.flush()
             session.refresh(task)
@@ -583,7 +614,8 @@ class TaskService:
             if not task:
                 raise TaskNotFoundError(task_id)
             
-            task.finish_time = datetime.now(_current_timezone)
+            season_tz = ValidationService.validate_timezone(active_season.timezone_string)
+            task.finish_time = datetime.now(season_tz)
             session.add(task)
             session.flush()
             session.refresh(task)
@@ -605,10 +637,11 @@ class TaskService:
                 raise TaskNotFoundError(task_id)
             
             task.completed = True
+            season_tz = ValidationService.validate_timezone(active_season.timezone_string)
             if not task.finish_time:
-                task.finish_time = datetime.now(_current_timezone)
+                task.finish_time = datetime.now(season_tz)
             
-            task.lp_gain = LPCalculationService.calculate_lp_gain(task)
+            task.lp_gain = LPCalculationService.calculate_lp_gain(task, season_tz)
             session.add(task)
             session.flush()
             session.refresh(task)
@@ -622,14 +655,14 @@ class TaskService:
         task_description: Optional[str] = None,
         project: Optional[str] = None,
         difficulty: Optional[int] = None,
-        dow: Optional[int] = None,
+        # dow: Optional[int] = None, # No longer needed, will be auto-detected
         duration: Optional[int] = None,
         reflection: Optional[str] = None
     ) -> Task:
-        """Update a task with new values."""
+        """Update any attribute of a task."""
         # Validate inputs
         difficulty_str = ValidationService.validate_and_convert_difficulty(difficulty) if difficulty is not None else None
-        dow_str = ValidationService.validate_and_convert_dow(dow) if dow is not None else None
+        # dow_str = ValidationService.validate_and_convert_dow(dow) if dow is not None else None # No longer needed
         
         with get_db_session() as session:
             active_season = SeasonService.get_active_season(session)
@@ -648,8 +681,8 @@ class TaskService:
                 task.project = project
             if difficulty_str is not None:
                 task.difficulty = difficulty_str
-            if dow_str is not None:
-                task.dow = dow_str
+            # if dow_str is not None: # No longer needed
+            #     task.dow = dow_str
             if duration is not None:
                 task.time_taken_minutes = duration
             if reflection is not None:
@@ -657,7 +690,8 @@ class TaskService:
             
             # Recalculate LP if task is completed
             if task.completed:
-                task.lp_gain = LPCalculationService.calculate_lp_gain(task)
+                season_tz = ValidationService.validate_timezone(active_season.timezone_string)
+                task.lp_gain = LPCalculationService.calculate_lp_gain(task, season_tz)
             
             session.add(task)
             session.flush()
@@ -692,13 +726,14 @@ class TaskService:
             if not completed_tasks:
                 return 0
             
+            season_tz = ValidationService.validate_timezone(active_season.timezone_string)
             recalculated_count = 0
             for task in completed_tasks:
                 # Normalize legacy difficulty values
                 if task.difficulty in DIFFICULTY_NORMALIZATION_MAP:
                     task.difficulty = DIFFICULTY_NORMALIZATION_MAP[task.difficulty]
                 
-                new_lp = LPCalculationService.calculate_lp_gain(task)
+                new_lp = LPCalculationService.calculate_lp_gain(task, season_tz)
                 if task.lp_gain != new_lp:
                     task.lp_gain = new_lp
                     recalculated_count += 1
@@ -770,18 +805,46 @@ class StatusService:
                 if pd.notna(task_finish_time):
                     task_finish_time_in_season_tz = task_finish_time.astimezone(season_timezone)
                     
-                    task_lp_day = task_finish_time_in_season_tz.date()
+                    task_lp_date = task_finish_time_in_season_tz.date()
                     if task_finish_time_in_season_tz.time() < time(day_start_hour):
-                        task_lp_day = (task_finish_time_in_season_tz - timedelta(days=1)).date()
+                        task_lp_date = (task_finish_time_in_season_tz - timedelta(days=1)).date()
                     
-                    return task_lp_day == today_for_lp_gain_comparison
+                    return task_lp_date == today_for_lp_gain_comparison
                 return False
 
             # Calculate daily LP gain
             if df_completed.empty:
                 daily_lp_gain = 0.0
+                lp_by_day = {day: 0.0 for day in ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']}
             else:
                 daily_lp_gain = df_completed[df_completed.apply(is_task_for_today_lp, axis=1)]['lp_gain'].sum()
+
+                # Calculate LP per day for the current week (Mon-Sun)
+                today_date = now_in_season_tz.date()
+                start_of_week = today_date - timedelta(days=today_date.weekday())
+                end_of_week = start_of_week + timedelta(days=6)
+
+                # Helper to map finish_time to its LP day for weekly summary
+                def get_lp_day(row):
+                    task_finish_time = row['finish_time']
+                    if pd.notna(task_finish_time):
+                        task_finish_time_in_season_tz = task_finish_time.astimezone(season_timezone)
+                        
+                        task_lp_date = task_finish_time_in_season_tz.date()
+                        if task_finish_time_in_season_tz.time() < time(day_start_hour):
+                            task_lp_date = (task_finish_time_in_season_tz - timedelta(days=1)).date()
+                        
+                        if start_of_week <= task_lp_date <= end_of_week:
+                            # Use the adjusted date to get the day of the week, not the original timestamp
+                            return task_lp_date.strftime('%a')
+                    return None
+
+                df_completed['lp_day_of_week'] = df_completed.apply(get_lp_day, axis=1)
+                weekly_lp = df_completed.groupby('lp_day_of_week')['lp_gain'].sum()
+                
+                # Ensure all days of the week are present
+                days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                lp_by_day = {day: weekly_lp.get(day, 0.0) for day in days}
 
             # Calculate time until next decay
             todays_decay_point = now_in_season_tz.replace(hour=day_start_hour, minute=0, second=0, microsecond=0)
@@ -801,67 +864,55 @@ class StatusService:
                 'total_decay': total_decay,
                 'net_total_lp': net_total_lp,
                 'daily_lp_gain': daily_lp_gain,
-                'days_passed': days_passed,
-                'breakeven_lp_gain_required': breakeven_lp_gain_required,
                 'time_until_next_decay': time_until_next_decay,
+                'breakeven_lp_gain_required': breakeven_lp_gain_required,
+                'lp_by_day': lp_by_day,
+                'season_name': active_season.name
             }
 
     @staticmethod
     def get_status_string() -> str:
-        """
-        Get a formatted string of the current LP status.
-        
-        Returns:
-            str: A formatted string containing LP status details.
-        """
-        lp_status = StatusService.get_lp_status()
+        """Format the LP status dictionary into a readable string."""
+        status = StatusService.get_lp_status()
         active_season = SeasonService.get_current_season()
+        season_name = status.get('season_name', 'N/A')
 
-        status_string = f"Current Season: {active_season.name}\n"
-        status_string += f"Total LP Gain: {lp_status['total_lp_gain']:.2f}\n"
-        status_string += f"Total Decay: ({lp_status['days_passed']} days * {active_season.daily_decay} LP/day) = {lp_status['total_decay']:.2f}\n"
-        status_string += f"Net Total LP: {lp_status['net_total_lp']:.2f}\n"
-        status_string += "--------------------\n"
-        status_string += f"Today's LP Gain: {lp_status['daily_lp_gain']:.2f}\n"
-        status_string += "--------------------\n"
+        total_lp_gain = status.get('total_lp_gain', 0.0)
+        total_decay = status.get('total_decay', 0.0)
+        net_total_lp = status.get('net_total_lp', 0.0)
+        daily_lp_gain = status.get('daily_lp_gain', 0.0)
+        time_until_next_decay = status.get('time_until_next_decay')
+        breakeven_lp_gain_required = status.get('breakeven_lp_gain_required', 0.0)
+        lp_by_day = status.get('lp_by_day', {})
 
-        breakeven_lp = lp_status['breakeven_lp_gain_required']
-        time_str = StatusService.format_timedelta(lp_status['time_until_next_decay'])
+        status_str = f"Current Season: {season_name}\n"
+        status_str += f"Total LP Gain: {total_lp_gain:.2f}\n"
+        status_str += f"Total Decay: {total_decay:.2f}\n"
+        status_str += f"Net Total LP: {net_total_lp:.2f}\n"
+        status_str += "--------------------\n"
+        
+        # Add LP by Day of Week
+        status_str += "LP by Day of Week:\n"
+        day_lp_parts = []
+        daily_decay = active_season.daily_decay
 
-        if breakeven_lp > 0:
-            status_string += f"Survival Delta: You need to gain {breakeven_lp:.2f} LP in the next {time_str} to break even.\n"
+        for day, lp in lp_by_day.items():
+            if lp < daily_decay:
+                day_lp_parts.append(f"[cyan]{day}[/cyan]: [bold red]{lp:.2f}[/bold red]")
+            else:
+                day_lp_parts.append(f"[cyan]{day}[/cyan]: [bold green]{lp:.2f}[/bold green]")
+        
+        status_str += " | ".join(day_lp_parts) + "\n"
+        status_str += "--------------------\n"
+
+        status_str += f"Today's LP Gain: {daily_lp_gain:.2f}\n"
+        
+        if time_until_next_decay:
+            status_str += f"Survival Delta: You need to gain {breakeven_lp_gain_required:.2f} LP in the next {StatusService.format_timedelta(time_until_next_decay)} to break even.\n"
         else:
-            status_string += f"Survival Delta: You will survive the next decay. Next decay in {time_str}.\n"
+            status_str += f"Survival Delta: You will survive the next decay. Next decay in {StatusService.format_timedelta(time_until_next_decay)}.\n"
 
-        return status_string
-
-
-class TimezoneService:
-    """Service for timezone management."""
-    
-    @staticmethod
-    def set_timezone(timezone_string: str) -> None:
-        """Set the application timezone."""
-        global _current_timezone
-        timezone_obj = ValidationService.validate_timezone(timezone_string)
-        _current_timezone = timezone_obj
-        logger.info(f"Timezone set to: {timezone_string}")
-
-        # Additionally, update the active season's timezone_string in the database
-        with get_db_session() as session:
-            try:
-                active_season = SeasonService.get_active_season(session)
-                active_season.timezone_string = timezone_string
-                session.add(active_season)
-                session.commit() # Commit immediately to persist the timezone change for the active season
-                logger.info(f"Updated active season '{active_season.name}' timezone to: {timezone_string}")
-            except NoActiveSeasonError:
-                logger.warning("No active season to update timezone for. Timezone set globally but not persisted to a season.")
-    
-    @staticmethod
-    def get_current_timezone():
-        """Get the current timezone."""
-        return _current_timezone
+        return status_str
 
 
 class BackupService:
