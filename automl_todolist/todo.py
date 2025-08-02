@@ -332,7 +332,7 @@ def plot_lp(
     filename: str = typer.Option("lp_plot.png", "--filename", "-f", help="Filename for the saved PNG plot."),
     include_forecast: bool = typer.Option(True, "--forecast", "-F", help="Include SARIMAX forecast in the plot."),
     include_linear_regression: bool = typer.Option(True, "--linear-regression", "--lr", "-R", help="Include linear regression in the plot."),
-    forecast_days: int = typer.Option(2, "--forecast-days", "-D", help="Number of days to forecast into the future for all models.")
+    forecast_days: int = typer.Option(1, "--forecast-days", "-D", help="Number of days to forecast into the future for all models.")
 ):
     """Generate and serve a plot of cumulative net LP over time."""
     from .services import AnalysisService

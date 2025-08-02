@@ -37,7 +37,7 @@ VALID_DIFFICULTIES = set(DIFFICULTY_MAP_INT_TO_STR.values())
 POINTS_MAP: Dict[str, int] = {
     "Easy": 1,
     "Easy-Med": 2,
-    "Med": 4,
+    "Med": 4, # Changed from 6 back to 4
     "Med-Hard": 8,
     "Hard": 16,
 }

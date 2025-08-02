@@ -1081,48 +1081,46 @@ class AnalysisService:
         Returns:
             pd.Series: Forecasted values with corresponding timestamps.
         """
-        # Resample to daily frequency, filling missing days with the last known value (forward fill)
-        # This is important for SARIMAX which expects regular time intervals.
-        daily_series = series.resample('D').ffill().fillna(method='bfill') # Handle NaNs at start/end
-        
         # Use auto_arima to find the best SARIMAX parameters
         # m=7 for weekly seasonality (7 days in a week)
         # suppress_warnings=True to keep output clean
         # stepwise=True for faster search
         
         # If not enough data for meaningful seasonal analysis, disable seasonal fitting
-        seasonal_arg = True
-        if len(daily_series) < 14: # Less than two full weeks of daily data
-            seasonal_arg = False
-            logger.warning("Insufficient data for seasonal SARIMAX. Fitting non-seasonal model.")
+        # seasonal_arg = True
+        # if len(daily_series) < 14: # Less than two full weeks of daily data
+        #     seasonal_arg = False
+        #     logger.warning("Insufficient data for seasonal SARIMAX. Fitting non-seasonal model.")
 
-        if len(daily_series) < 2: # Not enough data even for non-seasonal model
+        if len(series) < 2: # Not enough data even for non-seasonal model (changed from daily_series to series)
             logger.warning("Very limited data. Cannot fit SARIMAX model. Returning last known LP as forecast.")
             # Return a simple flat forecast based on the last known value
             last_lp = series.iloc[-1] if not series.empty else 0.0
             last_date = series.index[-1] if not series.empty else datetime.now(timezone.utc) # Fallback if series is empty
+            # For event-based forecasting, extend by timedelta, not days, for closer spacing if needed
+            # For simplicity, forecasting daily points into future from last event.
             forecast_index = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=forecast_steps, freq='D')
             return pd.Series(last_lp, index=forecast_index)
 
         # Temporarily suppress the specific FutureWarning from sklearn about 'force_all_finite'
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=FutureWarning, module=r'sklearn\.utils\.deprecation', message=".*force_all_finite.*")
-            model = pm.auto_arima(daily_series,
-                                  seasonal=seasonal_arg, m=7,
+            model = pm.auto_arima(series, # Changed from daily_series
+                                  seasonal=False, m=1, # Changed to non-seasonal, m=1
                                   suppress_warnings=True,
                                   stepwise=True)
         
         # Generate forecast
         forecast_values = model.predict(n_periods=forecast_steps)
         
-        # Create a date range for the forecast
-        last_date = daily_series.index[-1]
+        # Create a date range for the forecast. This will still be daily points for forecasting.
+        last_date = series.index[-1] # Changed from daily_series.index[-1]
         forecast_index = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=forecast_steps, freq='D')
         forecast_series = pd.Series(forecast_values, index=forecast_index)
         
         # Prepend the last actual data point to the forecast for smooth plotting
-        full_forecast_index = daily_series.index[-1:].union(forecast_index)
-        full_forecast_values = np.concatenate(([daily_series.iloc[-1]], forecast_values))
+        full_forecast_index = series.index[-1:].union(forecast_index) # Changed from daily_series.index[-1:]
+        full_forecast_values = np.concatenate(([series.iloc[-1]], forecast_values)) # Changed from daily_series.iloc[-1]
         full_forecast_series = pd.Series(full_forecast_values, index=full_forecast_index)
         
         return full_forecast_series
