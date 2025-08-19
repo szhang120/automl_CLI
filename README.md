@@ -13,6 +13,7 @@ A powerful, command-line to-do list application for detailed life and task track
 - **Local SQLite Database:** All data is stored in a local `tasks.db` file.
 - **Rich Terminal Output:** Clean, readable tables for viewing tasks and logs.
 - **Backup and Restore:** Export all your data to a JSON file and import it back, allowing for data preservation even after schema changes.
+- **Interactive Backlogging:** Click on a timeline plot to add historical tasks at exact times (`todo plot --interactive`).
 
 ## Data Storage
 
@@ -173,28 +174,26 @@ This process ensures that your data is safely transferred to the new schema, pre
 
 ---
 
-### Data Analysis (`todo analysis`)
+### Plotting and Backlogging (`todo plot`)
 
-This set of commands allows you to visualize your productivity and LP trends over time.
+Generate a plot of your cumulative net LP for the current season, optionally adding tasks by clicking on the timeline.
 
-#### `analysis plot-lp`
-
-Generates a plot of your cumulative net LP for the current season. By default, it launches an interactive plot in your web browser and includes SARIMAX forecast and linear regression lines.
-
-- **Usage:** `todo analysis plot-lp [OPTIONS]`
+- **Usage:** `todo plot [OPTIONS]`
 - **Options:**
+    - `--interactive` or `-i`: Start interactive mode. Click anywhere on the plot (including empty spaces) to add a task at that time.
     - `--save-png` or `-s`: Save the plot as a PNG image file instead of opening it in a browser.
-    - `--filename` or `-f`: Specify the filename for the saved PNG image (default: `lp_plot.png`).
+    - `--filename` or `-f`: Filename for the saved PNG image (default: `lp_plot.png`).
     - `--forecast` or `-F`: Include SARIMAX forecast in the plot (enabled by default).
     - `--linear-regression` or `--lr` or `-R`: Include linear regression in the plot (enabled by default).
-    - `--forecast-days` or `-D`: Number of days to forecast into the future for all models (default: 2).
-- **Example (interactive plot with all defaults):**
+    - `--forecast-days` or `-D`: Number of days to forecast (default: 1).
+
+- **Examples:**
     ```bash
-    todo analysis plot-lp
-    ```
-- **Example (saving to a file without forecast):**
-    ```bash
-    todo analysis plot-lp --save-png --filename my_progress.png --no-forecast
+    # Interactive backlogging session
+    todo plot --interactive
+
+    # Save a static image
+    todo plot --save-png --filename lp.png
     ```
 
 ---
@@ -287,20 +286,40 @@ Updates any attribute of a task, whether it is active or complete.
 
 ### `log`
 
-Displays a log of all completed tasks. At the end of the log, it also shows a full LP status report, including decay.
+Displays the most recent completed tasks (default: last 10). Use `--limit`/`-n` to change the number.
 
-- **Usage:** `todo log`
-- **Output:** A detailed table of completed tasks, followed by the LP status summary.
+- **Usage:** `todo log [--limit N]`
+- **Options:**
+    - `--limit` or `-n`: Number of most recent completed tasks to show (default: 10).
+- **Examples:**
+    ```bash
+    todo log          # show last 10
+    todo log -n 25    # show last 25
+    ```
 
 ---
 
 ### `status`
 
-Shows a detailed summary of your Life Points (LP), including the daily decay.
+Shows a detailed summary of your Life Points (LP), including the daily decay and a weekly breakdown. You can view prior weeks with a week offset.
 
-- **Usage:** `todo status`
+- **Usage:** `todo status [WEEK]`
 - **Output:** Displays:
     - `Total LP Gain`: The sum of all LP from completed tasks.
     - `Total Decay`: The total LP decay calculated from the season's start date.
     - `Net Total LP`: The final, decay-adjusted LP for the season.
-    - `Today's LP Gain`: The LP gained from tasks completed today. 
+    - `Today's LP Gain`: The LP gained from tasks completed today.
+    - `LP by Day of Week`: LP for Mon-Sun for the selected week.
+- **Arguments:**
+    - `WEEK`: Week offset relative to current week. Use `0` (default) for this week, `-1` for last week, `-2` for two weeks ago, etc.
+
+---
+
+### Backlogging Workflow (Quality-of-life)
+
+During intense periods (e.g., exams, deadlines), you can backlog tasks efficiently:
+
+1. Run `todo plot --interactive`.
+2. Click anywhere on the timeline to pick the finish time for the task.
+3. Fill the form (task, project, difficulty, duration) and submit.
+4. Click “Refresh Data” to pull the latest data if needed.

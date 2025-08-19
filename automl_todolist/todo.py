@@ -266,15 +266,17 @@ def done(task_id: int):
 
 @app.command()
 @handle_errors
-def log():
-    """List all completed tasks for the current season."""
+def log(
+    limit: int = typer.Option(10, "--limit", "-n", min=1, help="Number of most recent completed tasks to show.")
+):
+    """List completed tasks for the current season (most recent first)."""
     active_season = SeasonService.get_current_season()
     if not active_season:
         raise NoActiveSeasonError("No active season found.")
 
-    console.print(f"Completed Tasks for {active_season.name}", style="bold cyan")
+    console.print(f"Completed Tasks for {active_season.name} (last {limit})", style="bold cyan")
     
-    table = TaskService.get_completed_tasks_table()
+    table = TaskService.get_completed_tasks_table(limit=limit)
     console.print(table)
 
     status_string = StatusService.get_status_string()
@@ -305,6 +307,7 @@ def update(
     # day: Optional[int] = typer.Option(None, "--day", "-d", min=0, max=6, help="New Day of Week (0-6, or Mon, Tue, etc.)."), # Removed
     minutes: Optional[int] = typer.Option(None, "--minutes", "-m", help="New manual duration in minutes."),
     reflection: Optional[str] = typer.Option(None, "--reflection", "-r", help="New reflection notes."),
+    finish_time: Optional[str] = typer.Option(None, "--finish-time", "-f", help="New finish time (YYYY-MM-DD HH:MM:SS)."),
 ):
     """Update a task in the current season."""
     task_obj = TaskService.update_task(
@@ -314,15 +317,20 @@ def update(
         difficulty=level,
         # dow=day, # Removed
         duration=minutes,
-        reflection=reflection
+        reflection=reflection,
+        finish_time_str=finish_time
     )
     console.print(f"[bold green]Updated task:[/bold green] {task_obj.task}")
 
 @app.command()
 @handle_errors
-def status():
-    """Show the current LP status for the active season."""
-    status_string = StatusService.get_status_string()
+def status(
+    week: Optional[int] = typer.Option(None, "--week", "-w", help="Week offset relative to current week. Use -1 for last week, -2 for two weeks ago, etc."),
+    week_arg: Optional[int] = typer.Argument(None, help="Optional positional week offset. Tip: for negative values use --week -1 or `-- -1`.")
+):
+    """Show the LP status for the active season, with optional week offset for weekly breakdown."""
+    selected_week = week if week is not None else (week_arg if week_arg is not None else 0)
+    status_string = StatusService.get_status_string(week=selected_week)
     console.print(status_string)
 
 @app.command("plot") # Changed from @analysis_app.command("plot-lp")
@@ -332,12 +340,21 @@ def plot_lp(
     filename: str = typer.Option("lp_plot.png", "--filename", "-f", help="Filename for the saved PNG plot."),
     include_forecast: bool = typer.Option(True, "--forecast", "-F", help="Include SARIMAX forecast in the plot."),
     include_linear_regression: bool = typer.Option(True, "--linear-regression", "--lr", "-R", help="Include linear regression in the plot."),
-    forecast_days: int = typer.Option(1, "--forecast-days", "-D", help="Number of days to forecast into the future for all models.")
+    forecast_days: int = typer.Option(1, "--forecast-days", "-D", help="Number of days to forecast into the future for all models."),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="Start interactive mode for clicking to backlog tasks on the timeline.")
 ):
     """Generate and serve a plot of cumulative net LP over time."""
     from .services import AnalysisService
     
-    if save_png:
+    if interactive:
+        console.print("[bold green]Starting interactive plotting mode for task backlogging...[/bold green]")
+        AnalysisService.plot_lp_timeseries_plotly(
+            include_forecast=include_forecast, 
+            include_linear_regression=include_linear_regression, 
+            forecast_steps=forecast_days,
+            interactive=True
+        )
+    elif save_png:
         console.print(f"[bold green]Generating and saving plot to {filename}...[/bold green]")
         AnalysisService.plot_lp_timeseries_plotly(save_png=True, filename=filename, 
                                                   include_forecast=include_forecast, 

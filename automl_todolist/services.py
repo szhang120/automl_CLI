@@ -15,10 +15,14 @@ import numpy as np # Import numpy
 import warnings
 # from sklearn.utils.deprecation import is_deprecated # Import is_deprecated
 
-import panel as pn
-# import hvplot.pandas 
-
-pn.extension()
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import webbrowser
+import threading
+import time as time_module
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import urllib.parse
+import json as json_lib
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -497,10 +501,16 @@ class TaskService:
         return df
 
     @staticmethod
-    def get_completed_tasks_table() -> Table:
-        """Get a Rich Table of all completed tasks for the active season."""
+    def get_completed_tasks_table(limit: Optional[int] = None) -> Table:
+        """Get a Rich Table of completed tasks for the active season.
+
+        Args:
+            limit: If provided, only the most recent N completed tasks are shown.
+        """
         active_season = SeasonService.get_current_season()
         tasks = TaskService.get_completed_tasks()
+        if limit is not None and limit > 0:
+            tasks = tasks[:limit]
 
         table = Table(title=f"Completed Tasks for {active_season.name}")
         table.add_column("ID", style="cyan", no_wrap=True)
@@ -657,7 +667,8 @@ class TaskService:
         difficulty: Optional[int] = None,
         # dow: Optional[int] = None, # No longer needed, will be auto-detected
         duration: Optional[int] = None,
-        reflection: Optional[str] = None
+        reflection: Optional[str] = None,
+        finish_time_str: Optional[str] = None
     ) -> Task:
         """Update any attribute of a task."""
         # Validate inputs
@@ -688,6 +699,17 @@ class TaskService:
             if reflection is not None:
                 task.reflection = reflection
             
+            # Update finish time if provided
+            if finish_time_str is not None:
+                try:
+                    naive_dt = datetime.strptime(finish_time_str, "%Y-%m-%d %H:%M:%S")
+                    season_tz = ValidationService.validate_timezone(active_season.timezone_string)
+                    task.finish_time = naive_dt.replace(tzinfo=season_tz)
+                except ValueError as e:
+                    logger.error(f"Invalid finish time format '{finish_time_str}': {e}")
+                    # Optionally, you could raise an exception here to notify the user
+                    pass  # Or raise a custom exception
+
             # Recalculate LP if task is completed
             if task.completed:
                 season_tz = ValidationService.validate_timezone(active_season.timezone_string)
@@ -758,7 +780,7 @@ class StatusService:
         return f"{int(hours)} hours, {int(minutes)} minutes"
 
     @staticmethod
-    def get_lp_status() -> dict:
+    def get_lp_status(week: int = 0) -> dict:
         """
         Get the current LP status for the active season.
 
@@ -774,6 +796,7 @@ class StatusService:
             season_tz_str = active_season.timezone_string
             season_timezone = gettz(season_tz_str)
             day_start_hour = active_season.day_start_hour
+            daily_decay = active_season.daily_decay
 
             # Get all completed tasks for the season to build a DataFrame
             df_completed = TaskService.get_completed_tasks_as_df()
@@ -812,16 +835,18 @@ class StatusService:
                     return task_lp_date == today_for_lp_gain_comparison
                 return False
 
-            # Calculate daily LP gain
+            # Calculate daily LP gain and LP per day for the target week (offset by weeks)
             if df_completed.empty:
                 daily_lp_gain = 0.0
                 lp_by_day = {day: 0.0 for day in ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']}
             else:
+                # LP today (relative to current date only)
                 daily_lp_gain = df_completed[df_completed.apply(is_task_for_today_lp, axis=1)]['lp_gain'].sum()
 
-                # Calculate LP per day for the current week (Mon-Sun)
+                # Calculate LP per day for the selected week (Mon-Sun), offset by week
                 today_date = now_in_season_tz.date()
-                start_of_week = today_date - timedelta(days=today_date.weekday())
+                current_week_start = today_date - timedelta(days=today_date.weekday())
+                start_of_week = current_week_start + timedelta(weeks=week)
                 end_of_week = start_of_week + timedelta(days=6)
 
                 # Helper to map finish_time to its LP day for weekly summary
@@ -846,6 +871,25 @@ class StatusService:
                 days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
                 lp_by_day = {day: weekly_lp.get(day, 0.0) for day in days}
 
+                # Weekly totals (LP gain and decay) and delta for the selected week
+                weekly_lp_total = sum(lp_by_day.values())
+
+                # Determine weekly decay events to count within the selected week window
+                week_window_start = datetime.combine(start_of_week, time(day_start_hour), tzinfo=season_timezone)
+                if week == 0:
+                    week_window_end = now_in_season_tz
+                else:
+                    week_window_end = datetime.combine(end_of_week + timedelta(days=1), time(day_start_hour), tzinfo=season_timezone)
+
+                decay_count_in_week = 0
+                current_decay_point_for_week = max(first_decay_point_for_season, week_window_start)
+                # Count decay events that occur within [week_window_start, week_window_end) (end exclusive)
+                while current_decay_point_for_week < week_window_end:
+                    decay_count_in_week += 1
+                    current_decay_point_for_week += timedelta(days=1)
+                weekly_decay = decay_count_in_week * daily_decay
+                weekly_delta = weekly_lp_total - weekly_decay
+
             # Calculate time until next decay
             todays_decay_point = now_in_season_tz.replace(hour=day_start_hour, minute=0, second=0, microsecond=0)
             if now_in_season_tz >= todays_decay_point:
@@ -856,7 +900,6 @@ class StatusService:
 
             # Calculate LP needed to survive next decay
             net_total_lp = total_lp_gain - total_decay
-            daily_decay = active_season.daily_decay
             breakeven_lp_gain_required = max(0, daily_decay - net_total_lp)
 
             return {
@@ -867,13 +910,17 @@ class StatusService:
                 'time_until_next_decay': time_until_next_decay,
                 'breakeven_lp_gain_required': breakeven_lp_gain_required,
                 'lp_by_day': lp_by_day,
-                'season_name': active_season.name
+                'season_name': active_season.name,
+                'week': week,
+                'weekly_lp_total': weekly_lp_total if not df_completed.empty else 0.0,
+                'weekly_decay': weekly_decay if not df_completed.empty else 0.0,
+                'weekly_delta': weekly_delta if not df_completed.empty else 0.0
             }
 
     @staticmethod
-    def get_status_string() -> str:
+    def get_status_string(week: int = 0) -> str:
         """Format the LP status dictionary into a readable string."""
-        status = StatusService.get_lp_status()
+        status = StatusService.get_lp_status(week=week)
         active_season = SeasonService.get_current_season()
         season_name = status.get('season_name', 'N/A')
 
@@ -884,8 +931,13 @@ class StatusService:
         time_until_next_decay = status.get('time_until_next_decay')
         breakeven_lp_gain_required = status.get('breakeven_lp_gain_required', 0.0)
         lp_by_day = status.get('lp_by_day', {})
+        weekly_lp_total = status.get('weekly_lp_total', 0.0)
+        weekly_decay = status.get('weekly_decay', 0.0)
+        weekly_delta = status.get('weekly_delta', 0.0)
 
         status_str = f"Current Season: {season_name}\n"
+        if week != 0:
+            status_str += f"Viewing week offset: {week} (Mon-Sun)\n"
         status_str += f"Total LP Gain: {total_lp_gain:.2f}\n"
         status_str += f"Total Decay: {total_decay:.2f}\n"
         status_str += f"Net Total LP: {net_total_lp:.2f}\n"
@@ -904,6 +956,7 @@ class StatusService:
         
         status_str += " | ".join(day_lp_parts) + "\n"
         status_str += "--------------------\n"
+        status_str += f"Selected Week LP Gain: {weekly_lp_total:.2f} | Decay: {weekly_decay:.2f} | Delta: {weekly_delta:.2f}\n"
 
         status_str += f"Today's LP Gain: {daily_lp_gain:.2f}\n"
         
@@ -1211,10 +1264,11 @@ class AnalysisService:
     def plot_lp_timeseries_plotly(save_png: bool = False, filename="lp_plot.png", 
                                   include_forecast: bool = False, include_linear_regression: bool = False,
                                   # include_spline: bool = False, 
-                                  forecast_steps: int = 7):
+                                  forecast_steps: int = 7, interactive: bool = False):
         """
         Generate and either serve or save a Plotly plot of LP over time.
         Can include a SARIMAX forecast, a linear regression line, and/or a spline fit.
+        If interactive=True, serves a clickable plot for backlogging tasks.
         """
         lp_df = AnalysisService.get_lp_timeseries_data()
         
@@ -1283,8 +1337,282 @@ class AnalysisService:
             yaxis_title="Cumulative Net LP",
         )
         
-        if save_png:
+        if interactive:
+            AnalysisService._serve_interactive_plot(fig)
+        elif save_png:
             fig.write_image(filename)
             print(f"Plot saved to {filename}")
         else:
-            fig.show() 
+            fig.show()
+
+    @staticmethod
+    def _serve_interactive_plot(fig):
+        """Serve an interactive plot that allows clicking to add tasks."""
+        
+        class InteractiveHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == '/':
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/html')
+                    self.end_headers()
+                    
+                    # Always get fresh data on each page load to show new tasks
+                    fresh_lp_df = AnalysisService.get_lp_timeseries_data()
+                    if fresh_lp_df.empty:
+                        # Return a simple message if no data
+                        self.wfile.write(b'<html><body><h1>No LP data available</h1></body></html>')
+                        return
+                    
+                    # Create fresh plot with current data
+                    fresh_fig = px.line(
+                        fresh_lp_df,
+                        x='timestamp',
+                        y='cumulative_lp',
+                        title='Cumulative Net LP Over Time',
+                        labels={'timestamp': 'Timestamp', 'cumulative_lp': 'Cumulative Net LP'},
+                        markers=True
+                    )
+                    fresh_fig.update_layout(
+                        template="plotly_white",
+                        xaxis=dict(tickformat="%Y-%m-%d %H:%M"),
+                        yaxis=dict(gridcolor='lightgrey'),
+                        xaxis_title="Timestamp",
+                        yaxis_title="Cumulative Net LP",
+                    )
+                    
+                    # Create HTML with embedded plot and click handling
+                    plot_json = fresh_fig.to_json()
+                    
+                    # Build HTML template manually to avoid f-string issues
+                    html = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Interactive LP Plot - Click to Add Tasks</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .form-container { 
+            position: fixed; top: 10px; right: 10px; 
+            background: white; border: 2px solid #333; 
+            padding: 15px; border-radius: 5px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 300px;
+        }
+        .form-container input, .form-container select { 
+            width: 100%; margin: 5px 0; padding: 5px; 
+            border: 1px solid #ccc; border-radius: 3px;
+        }
+        .form-container button { 
+            width: 48%; margin: 5px 1%; padding: 8px; 
+            border: none; border-radius: 3px; cursor: pointer;
+        }
+        .submit-btn { background: #28a745; color: white; }
+        .cancel-btn { background: #dc3545; color: white; }
+        #plot { width: 70%; height: 80vh; }
+        .instructions { 
+            background: #e9ecef; padding: 10px; border-radius: 5px; margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="instructions">
+        <strong>Interactive Task Backlogging</strong><br>
+        Click anywhere on the plot area (including empty spaces between points) to add a task at that exact time.
+        <button onclick="location.reload()" style="float: right; background: #007bff; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer;">Refresh Data</button>
+    </div>
+    
+    <div id="plot"></div>
+    
+    <div id="form-container" class="form-container" style="display: none;">
+        <h4>Add Task</h4>
+        <p id="selected-time"></p>
+        <input type="text" id="task-desc" placeholder="Task description" required>
+        <input type="text" id="project" placeholder="Project (optional)">
+        <select id="difficulty">
+            <option value="">Select difficulty (optional)</option>
+            <option value="1">Easy</option>
+            <option value="2">Easy-Med</option>
+            <option value="3">Med</option>
+            <option value="4">Med-Hard</option>
+            <option value="5">Hard</option>
+        </select>
+        <input type="number" id="duration" placeholder="Duration in minutes (optional)">
+        <button class="submit-btn" onclick="submitTask()">Add Task</button>
+        <button class="cancel-btn" onclick="hideForm()">Cancel</button>
+    </div>
+
+    <script>
+        var plotData = """ + plot_json + """;
+        var selectedTimestamp = null;
+
+        Plotly.newPlot('plot', plotData.data, plotData.layout);
+        
+        var plotDiv = document.getElementById('plot');
+        
+        // Create click detection for the entire plot area
+        plotDiv.addEventListener('click', function(event) {
+            var plotRect = plotDiv.getBoundingClientRect();
+            var x = event.clientX - plotRect.left;
+            var y = event.clientY - plotRect.top;
+            
+            // Use Plotly's built-in coordinate conversion
+            if (plotDiv._fullLayout && plotDiv._fullLayout.xaxis) {
+                var xaxis = plotDiv._fullLayout.xaxis;
+                var yaxis = plotDiv._fullLayout.yaxis;
+                
+                // Check if click is within plot area
+                if (x >= xaxis._offset && x <= xaxis._offset + xaxis._length &&
+                    y >= yaxis._offset && y <= yaxis._offset + yaxis._length) {
+                    
+                    // Convert pixel coordinates to data coordinates
+                    var relativeX = (x - xaxis._offset) / xaxis._length;
+                    var xMin = new Date(xaxis.range[0]).getTime();
+                    var xMax = new Date(xaxis.range[1]).getTime();
+                    
+                    selectedTimestamp = new Date(xMin + relativeX * (xMax - xMin)).toISOString();
+                    
+                    document.getElementById('selected-time').textContent = 
+                        'Time: ' + new Date(selectedTimestamp).toLocaleString();
+                    document.getElementById('form-container').style.display = 'block';
+                    document.getElementById('task-desc').focus();
+                }
+            }
+        });
+        
+        // Still handle point clicks for existing behavior
+        plotDiv.on('plotly_click', function(data) {
+            if (data.points.length > 0) {
+                selectedTimestamp = data.points[0].x;
+                document.getElementById('selected-time').textContent = 
+                    'Time: ' + new Date(selectedTimestamp).toLocaleString();
+                document.getElementById('form-container').style.display = 'block';
+                document.getElementById('task-desc').focus();
+            }
+        });
+
+        function hideForm() {
+            document.getElementById('form-container').style.display = 'none';
+            selectedTimestamp = null;
+        }
+
+        function submitTask() {
+            var taskDesc = document.getElementById('task-desc').value.trim();
+            if (!taskDesc) {
+                alert('Please enter a task description');
+                return;
+            }
+
+            var formData = new URLSearchParams();
+            formData.append('timestamp', selectedTimestamp);
+            formData.append('task', taskDesc);
+            formData.append('project', document.getElementById('project').value);
+            formData.append('difficulty', document.getElementById('difficulty').value);
+            formData.append('duration', document.getElementById('duration').value);
+
+            fetch('/add-task', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Show success message and reload after a brief delay
+                    alert('Task added successfully! Refreshing plot to show new data...');
+                    setTimeout(() => {
+                        location.reload(); // Refresh to show updated plot
+                    }, 500);
+                } else {
+                    alert('Error: ' + data.error);
+                }
+            })
+            .catch(error => {
+                alert('Error adding task: ' + error);
+            });
+
+            hideForm();
+        }
+    </script>
+</body>
+</html>"""
+                    self.wfile.write(html.encode())
+                    
+                elif self.path == '/add-task':
+                    # This shouldn't be reached via GET, but handle gracefully
+                    self.send_response(405)
+                    self.end_headers()
+                    
+            def do_POST(self):
+                if self.path == '/add-task':
+                    content_length = int(self.headers['Content-Length'])
+                    post_data = self.rfile.read(content_length).decode('utf-8')
+                    params = urllib.parse.parse_qs(post_data)
+                    
+                    try:
+                        # Extract parameters
+                        timestamp_str = params['timestamp'][0]
+                        task_desc = params['task'][0]
+                        project = params.get('project', [''])[0] or None
+                        difficulty_str = params.get('difficulty', [''])[0]
+                        duration_str = params.get('duration', [''])[0]
+                        
+                        # Parse timestamp
+                        finish_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                        
+                        # Parse optional fields
+                        difficulty = int(difficulty_str) if difficulty_str else None
+                        duration = int(duration_str) if duration_str else None
+                        
+                        # Use TaskService to create the task
+                        TaskService.create_task(
+                            task_description=task_desc,
+                            project=project,
+                            difficulty=difficulty,
+                            duration=duration,
+                            completed=True,
+                            finish_time_str=finish_time.strftime("%Y-%m-%d %H:%M:%S")
+                        )
+                        
+                        response = {'success': True}
+                        
+                    except Exception as e:
+                        logger.error(f"Error adding task via interactive plot: {e}")
+                        response = {'success': False, 'error': str(e)}
+                    
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json_lib.dumps(response).encode())
+                    
+            def log_message(self, format, *args):
+                # Suppress server logs
+                pass
+        
+        # Start server in background thread
+        port = 8000
+        server = HTTPServer(('localhost', port), InteractiveHandler)
+        
+        def run_server():
+            try:
+                server.serve_forever()
+            except KeyboardInterrupt:
+                server.shutdown()
+        
+        server_thread = threading.Thread(target=run_server, daemon=True)
+        server_thread.start()
+        
+        # Open browser
+        url = f'http://localhost:{port}'
+        print(f"Interactive plot server started at {url}")
+        print("Click anywhere on the plot area (including empty spaces) to add a task at that exact time.")
+        print("Press Ctrl+C to stop the server and return to CLI.")
+        
+        webbrowser.open(url)
+        
+        try:
+            while True:
+                time_module.sleep(1)
+        except KeyboardInterrupt:
+            print("\nShutting down interactive plot server...")
+            server.shutdown()
+            server_thread.join(timeout=2) 
