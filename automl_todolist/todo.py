@@ -31,7 +31,7 @@ season_app = typer.Typer(help="Season management commands")
 backup_app = typer.Typer(help="Backup and restore commands")
 calendar_app = typer.Typer(help="Google Calendar integration commands")
 recurring_app = typer.Typer(
-    help="Manage templates for recurring tasks. Tasks are generated automatically via 'todo list' or 'todo recurring run'."
+    help="Manage templates for recurring tasks. Tasks are only generated when you run 'todo recurring run'."
 )
 # analysis_app = typer.Typer(help="Data analysis commands") # This will be removed as plot-lp is moved
 

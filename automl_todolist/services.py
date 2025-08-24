@@ -395,11 +395,11 @@ class TaskService:
         """
         # Validate inputs
         difficulty_str = ValidationService.validate_and_convert_difficulty(difficulty)
-        
+
         active_season = SeasonService.get_active_season(session)
         season_tz = ValidationService.validate_timezone(active_season.timezone_string)
         now = datetime.now(season_tz)
-        
+
         task_finish_time = None
         task_deadline = None
         if completed:
@@ -409,7 +409,7 @@ class TaskService:
                     task_finish_time = naive_dt.replace(tzinfo=season_tz)
                 except ValueError as e:
                     logger.error(f"Invalid finish time format '{finish_time_str}': {e}. Using current time.")
-                    task_finish_time = now # Fallback to current time on error
+                    task_finish_time = now  # Fallback to current time on error
             else:
                 task_finish_time = now
 
@@ -450,11 +450,10 @@ class TaskService:
             created_at=now,
             season_id=active_season.id
         )
-        
         # Calculate LP if completed
         if completed:
             new_task.lp_gain = LPCalculationService.calculate_lp_gain(new_task, season_tz)
-        
+
         session.add(new_task)
         session.flush()
         session.refresh(new_task)
@@ -465,6 +464,7 @@ class TaskService:
             _cal.ensure_event_for_task(new_task)
         except Exception:
             pass
+
         return new_task
 
     @staticmethod
@@ -516,7 +516,6 @@ class TaskService:
     @staticmethod
     def get_active_tasks() -> List[Task]:
         """Get all active (incomplete) tasks in the current season."""
-        RecurringTaskService.generate_tasks_from_templates()
         with get_db_session() as session:
             active_season = SeasonService.get_active_season(session)
             tasks = session.query(Task).filter(
@@ -1017,8 +1016,14 @@ class RecurringTaskService:
                 deadline_str = None
                 if template.due_time:
                     try:
-                        # Build local datetime string: YYYY-MM-DD HH:MM:SS
-                        deadline_local = datetime.combine(generation_date, time.fromisoformat(template.due_time))
+                        due_time_obj = time.fromisoformat(template.due_time)
+                        # Build localized datetime in the season's timezone
+                        deadline_local = datetime.combine(generation_date, due_time_obj, tzinfo=season_tz)
+                        # If the computed deadline is already in the past relative to 'now',
+                        # move it forward one day so recurring runs scheduled for "today"
+                        # result in a deadline that falls on or after the current date.
+                        if deadline_local < now:
+                            deadline_local = deadline_local + timedelta(days=1)
                         # Format to parse with timezone later in _create_task_with_session
                         deadline_str = deadline_local.strftime("%Y-%m-%d %H:%M:%S")
                     except Exception:
