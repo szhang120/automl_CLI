@@ -4,7 +4,7 @@ import logging
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -18,6 +18,39 @@ logger = logging.getLogger(__name__)
 # Database setup
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Ensure schema initialized lazily and safely (idempotent)
+_schema_initialized = False
+
+def _ensure_schema_initialized() -> None:
+    global _schema_initialized
+    if _schema_initialized:
+        return
+    try:
+        # Idempotent: creates missing tables only, does not drop existing
+        Base.metadata.create_all(bind=engine)
+
+        # Lightweight, safe column migrations for SQLite
+        with engine.connect() as conn:
+            # Ensure 'deadline' column on 'tasks'
+            try:
+                result = conn.exec_driver_sql("PRAGMA table_info('tasks')")
+                cols = [row[1] for row in result.fetchall()]
+                if 'deadline' not in cols:
+                    conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN deadline DATETIME")
+                    logger.debug("Added missing column tasks.deadline")
+                if 'importance' not in cols:
+                    conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN importance VARCHAR")
+                    logger.debug("Added missing column tasks.importance")
+            except Exception as _:
+                # Do not fail app startup due to PRAGMA limitations
+                pass
+
+        _schema_initialized = True
+        logger.debug("Verified database schema (create_all + light migrations).")
+    except Exception as e:
+        logger.error(f"Failed to ensure database schema: {e}")
+        raise DatabaseError(f"Failed to ensure database schema: {e}") from e
 
 
 @contextmanager
@@ -34,6 +67,9 @@ def get_db_session() -> Generator[Session, None, None]:
     Raises:
         DatabaseError: If database operation fails
     """
+    # Ensure tables exist before opening a session (safe, no data loss)
+    _ensure_schema_initialized()
+
     session = SessionLocal()
     try:
         yield session

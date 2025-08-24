@@ -30,6 +30,9 @@ DIFFICULTY_MAP_INT_TO_STR: Dict[int, str] = {
     5: "Hard",
 }
 
+# Difficulty mapping from string to integer (for creating recurring tasks from templates)
+DIFFICULTY_MAP_STR_TO_INT: Dict[str, int] = {v: k for k, v in DIFFICULTY_MAP_INT_TO_STR.items()}
+
 # Valid difficulty levels (for validation)
 VALID_DIFFICULTIES = set(DIFFICULTY_MAP_INT_TO_STR.values())
 

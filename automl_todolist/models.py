@@ -36,9 +36,36 @@ class Season(Base):
     
     # Relationships
     tasks = relationship("Task", back_populates="season")
+    recurring_tasks = relationship("RecurringTask", back_populates="season")
 
     def __repr__(self) -> str:
         return f"<Season(id={self.id}, name='{self.name}', active={self.is_active})>"
+
+
+class RecurringTask(Base):
+    """Model for recurring task templates."""
+    __tablename__ = "recurring_tasks"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task = Column(String, nullable=False)
+    project = Column(String, nullable=True)
+    difficulty = Column(String, nullable=True)
+    time_taken_minutes = Column(Integer, nullable=True)
+    
+    # Recurrence rules. e.g., 'daily', 'weekdays', 'weekends', or a comma-separated list of DOWs like 'Mon,Wed,Fri'
+    frequency = Column(String, nullable=False, default='daily') 
+    due_time = Column(String, nullable=True) # "HH:MM" format
+
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    
+    season_id = Column(Integer, ForeignKey("seasons.id"), nullable=False)
+    season = relationship("Season", back_populates="recurring_tasks")
+    
+    # tasks = relationship("Task", back_populates="recurring_task") # This line is removed
+
+    def __repr__(self) -> str:
+        return f"<RecurringTask(id={self.id}, task='{self.task}', frequency='{self.frequency}')>"
 
 
 class Task(Base):
@@ -69,15 +96,19 @@ class Task(Base):
     difficulty = Column(String, nullable=True)
     start_time = Column(DateTime(timezone=True), nullable=True)
     finish_time = Column(DateTime(timezone=True), nullable=True)
+    deadline = Column(DateTime(timezone=True), nullable=True)
     time_taken_minutes = Column(Integer, nullable=True)
     lp_gain = Column(Float, nullable=True)
     reflection = Column(String, nullable=True)
+    importance = Column(String, nullable=True) # 'Critical' or 'Non-Critical'
     completed = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
     season_id = Column(Integer, ForeignKey("seasons.id"), nullable=False)
+    # recurring_task_id = Column(Integer, ForeignKey("recurring_tasks.id"), nullable=True) # This line is removed
     
     # Relationships
     season = relationship("Season", back_populates="tasks")
+    # recurring_task = relationship("RecurringTask", back_populates="tasks") # This line is removed
 
     def __repr__(self) -> str:
         return f"<Task(id={self.id}, task='{self.task}', completed={self.completed})>" 

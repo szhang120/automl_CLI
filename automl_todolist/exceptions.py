@@ -34,6 +34,14 @@ class SeasonNotFoundError(AutoMLTodolistError):
         self.season_id = season_id
 
 
+class RecurringTaskNotFoundError(AutoMLTodolistError):
+    """Raised when a requested recurring task cannot be found."""
+    
+    def __init__(self, recurring_task_id: int):
+        super().__init__(f"Recurring task with ID {recurring_task_id} not found.")
+        self.recurring_task_id = recurring_task_id
+
+
 class ValidationError(AutoMLTodolistError):
     """Raised when input validation fails."""
     pass

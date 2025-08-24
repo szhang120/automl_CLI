@@ -23,6 +23,7 @@ import time as time_module
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import urllib.parse
 import json as json_lib
+import io # NEW IMPORT
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -35,14 +36,15 @@ from .config import (
     DIFFICULTY_NORMALIZATION_MAP, DEFAULT_TIMEZONE,
     MINUTES_PER_HOUR, ROUNDING_INTERVAL_MINUTES,
     MIN_DIFFICULTY_LEVEL, MAX_DIFFICULTY_LEVEL,
-    MIN_DOW_VALUE, MAX_DOW_VALUE
+    MIN_DOW_VALUE, MAX_DOW_VALUE,
+    DIFFICULTY_MAP_STR_TO_INT
 )
 from .database import get_db_session
-from .models import Season, Task
+from .models import Season, Task, RecurringTask
 from .exceptions import (
     NoActiveSeasonError, TaskNotFoundError, SeasonNotFoundError,
     InvalidDifficultyError, InvalidDayOfWeekError, InvalidTimezoneError,
-    BackupFileNotFoundError, BackupImportError
+    BackupFileNotFoundError, BackupImportError, RecurringTaskNotFoundError
 )
 
 # Configure logging
@@ -365,6 +367,107 @@ class TaskService:
     """Service for task management operations."""
     
     @staticmethod
+    def _create_task_with_session(
+        session: Session,
+        task_description: str,
+        project: Optional[str] = None,
+        difficulty: Optional[int] = None,
+        duration: Optional[int] = None,
+        completed: bool = False,
+        finish_time_str: Optional[str] = None,
+        deadline_str: Optional[str] = None,
+        importance: Optional[Any] = None
+    ) -> Task:
+        """
+        Create a new task. (Internal helper that uses an existing session).
+        
+        Args:
+            session: The database session to use.
+            task_description: Description of the task
+            project: Project or category
+            difficulty: Difficulty level (1-5)
+            duration: Manual duration in minutes
+            completed: Whether task is completed
+            finish_time_str: Optional finish time for completed tasks
+            
+        Returns:
+            Created task
+        """
+        # Validate inputs
+        difficulty_str = ValidationService.validate_and_convert_difficulty(difficulty)
+        
+        active_season = SeasonService.get_active_season(session)
+        season_tz = ValidationService.validate_timezone(active_season.timezone_string)
+        now = datetime.now(season_tz)
+        
+        task_finish_time = None
+        task_deadline = None
+        if completed:
+            if finish_time_str:
+                try:
+                    naive_dt = datetime.strptime(finish_time_str, "%Y-%m-%d %H:%M:%S")
+                    task_finish_time = naive_dt.replace(tzinfo=season_tz)
+                except ValueError as e:
+                    logger.error(f"Invalid finish time format '{finish_time_str}': {e}. Using current time.")
+                    task_finish_time = now # Fallback to current time on error
+            else:
+                task_finish_time = now
+
+        if deadline_str:
+            try:
+                naive_deadline = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M:%S")
+                task_deadline = naive_deadline.replace(tzinfo=season_tz)
+            except ValueError as e:
+                logger.error(f"Invalid deadline time format '{deadline_str}': {e}")
+
+        # DoW is based on created_at time. It will be updated if the task is started later.
+        dow_str = now.strftime('%a')
+
+        # Normalize importance (accept int 1/0 or string values)
+        imp_norm = None
+        if importance is not None:
+            try:
+                if isinstance(importance, int):
+                    imp_norm = "Critical" if importance == 1 else "Non-Critical"
+                else:
+                    if str(importance).lower() in ["critical", "crit", "high", "1"]:
+                        imp_norm = "Critical"
+                    else:
+                        imp_norm = "Non-Critical"
+            except Exception:
+                imp_norm = None
+
+        new_task = Task(
+            task=task_description,
+            project=project,
+            difficulty=difficulty_str,
+            dow=dow_str,
+            time_taken_minutes=duration,
+            completed=completed,
+            finish_time=task_finish_time,
+            deadline=task_deadline,
+            importance=imp_norm,
+            created_at=now,
+            season_id=active_season.id
+        )
+        
+        # Calculate LP if completed
+        if completed:
+            new_task.lp_gain = LPCalculationService.calculate_lp_gain(new_task, season_tz)
+        
+        session.add(new_task)
+        session.flush()
+        session.refresh(new_task)
+        logger.info(f"Created task: {task_description} (ID: {new_task.id})")
+        # Auto-sync to Calendar (best-effort, non-blocking failure)
+        try:
+            from . import calendar_sync as _cal
+            _cal.ensure_event_for_task(new_task)
+        except Exception:
+            pass
+        return new_task
+
+    @staticmethod
     def create_task(
         task_description: str,
         project: Optional[str] = None,
@@ -372,7 +475,9 @@ class TaskService:
         # dow: Optional[int] = None, # No longer needed, will be auto-detected
         duration: Optional[int] = None,
         completed: bool = False,
-        finish_time_str: Optional[str] = None
+        finish_time_str: Optional[str] = None,
+        deadline_str: Optional[str] = None,
+        importance: Optional[str] = None
     ) -> Task:
         """
         Create a new task.
@@ -393,55 +498,25 @@ class TaskService:
             InvalidDifficultyError: If difficulty is invalid
             InvalidDayOfWeekError: If dow is invalid
         """
-        # Validate inputs
-        difficulty_str = ValidationService.validate_and_convert_difficulty(difficulty)
-        
         with get_db_session() as session:
-            active_season = SeasonService.get_active_season(session)
-            season_tz = ValidationService.validate_timezone(active_season.timezone_string)
-            now = datetime.now(season_tz)
-            
-            task_finish_time = None
-            if completed:
-                if finish_time_str:
-                    try:
-                        naive_dt = datetime.strptime(finish_time_str, "%Y-%m-%d %H:%M:%S")
-                        task_finish_time = naive_dt.replace(tzinfo=season_tz)
-                    except ValueError as e:
-                        logger.error(f"Invalid finish time format '{finish_time_str}': {e}. Using current time.")
-                        task_finish_time = now # Fallback to current time on error
-                else:
-                    task_finish_time = now
-
-            # DoW is based on created_at time. It will be updated if the task is started later.
-            dow_str = now.strftime('%a')
-
-            new_task = Task(
-                task=task_description,
+            task = TaskService._create_task_with_session(
+                session=session,
+                task_description=task_description,
                 project=project,
-                difficulty=difficulty_str,
-                dow=dow_str,
-                time_taken_minutes=duration,
+                difficulty=difficulty,
+                duration=duration,
                 completed=completed,
-                finish_time=task_finish_time,
-                created_at=now,
-                season_id=active_season.id
+                finish_time_str=finish_time_str,
+                deadline_str=deadline_str,
+                importance=importance
             )
-            
-            # Calculate LP if completed
-            if completed:
-                new_task.lp_gain = LPCalculationService.calculate_lp_gain(new_task, season_tz)
-            
-            session.add(new_task)
-            session.flush()
-            session.refresh(new_task)
-            session.expunge(new_task)
-            logger.info(f"Created task: {task_description} (ID: {new_task.id})")
-            return new_task
+            session.expunge(task)
+            return task
     
     @staticmethod
     def get_active_tasks() -> List[Task]:
         """Get all active (incomplete) tasks in the current season."""
+        RecurringTaskService.generate_tasks_from_templates()
         with get_db_session() as session:
             active_season = SeasonService.get_active_season(session)
             tasks = session.query(Task).filter(
@@ -655,6 +730,12 @@ class TaskService:
             session.add(task)
             session.flush()
             session.refresh(task)
+            # Auto-sync calendar to reflect completion status/time
+            try:
+                from . import calendar_sync as _cal
+                _cal.ensure_event_for_task(task)
+            except Exception:
+                pass
             session.expunge(task)
             logger.info(f"Completed task: {task.task} (ID: {task_id})")
             return task
@@ -668,7 +749,9 @@ class TaskService:
         # dow: Optional[int] = None, # No longer needed, will be auto-detected
         duration: Optional[int] = None,
         reflection: Optional[str] = None,
-        finish_time_str: Optional[str] = None
+        finish_time_str: Optional[str] = None,
+        deadline_str: Optional[str] = None,
+        importance: Optional[str] = None
     ) -> Task:
         """Update any attribute of a task."""
         # Validate inputs
@@ -698,6 +781,14 @@ class TaskService:
                 task.time_taken_minutes = duration
             if reflection is not None:
                 task.reflection = reflection
+            if importance is not None:
+                if isinstance(importance, int):
+                    task.importance = "Critical" if importance == 1 else "Non-Critical"
+                else:
+                    if str(importance).lower() in ["critical", "crit", "high", "1"]:
+                        task.importance = "Critical"
+                    else:
+                        task.importance = "Non-Critical"
             
             # Update finish time if provided
             if finish_time_str is not None:
@@ -710,6 +801,15 @@ class TaskService:
                     # Optionally, you could raise an exception here to notify the user
                     pass  # Or raise a custom exception
 
+            # Update deadline if provided
+            if deadline_str is not None:
+                try:
+                    naive_deadline = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M:%S")
+                    season_tz = ValidationService.validate_timezone(active_season.timezone_string)
+                    task.deadline = naive_deadline.replace(tzinfo=season_tz)
+                except ValueError as e:
+                    logger.error(f"Invalid deadline format '{deadline_str}': {e}")
+
             # Recalculate LP if task is completed
             if task.completed:
                 season_tz = ValidationService.validate_timezone(active_season.timezone_string)
@@ -720,6 +820,12 @@ class TaskService:
             session.refresh(task)
             session.expunge(task)
             logger.info(f"Updated task: {task.task} (ID: {task_id})")
+            # Auto-sync to Calendar
+            try:
+                from . import calendar_sync as _cal
+                _cal.ensure_event_for_task(task)
+            except Exception:
+                pass
             return task
     
     @staticmethod
@@ -734,6 +840,12 @@ class TaskService:
             session.delete(task)
             session.commit()
             logger.info(f"Deleted task: {task.task} (ID: {task_id})")
+            # Auto-delete calendar event mapping
+            try:
+                from . import calendar_sync as _cal
+                _cal.delete_event_for_task(task_id)
+            except Exception:
+                pass
     
     @staticmethod
     def recalculate_all_lp() -> int:
@@ -765,6 +877,164 @@ class TaskService:
                 logger.info(f"Recalculated LP for {recalculated_count} tasks")
             
             return recalculated_count
+
+
+class RecurringTaskService:
+    """Service for recurring task management."""
+
+    @staticmethod
+    def create_recurring_task(
+        task_description: str,
+        frequency: str,
+        project: Optional[str] = None,
+        difficulty: Optional[int] = None,
+        duration: Optional[int] = None,
+        due_time: Optional[str] = None
+    ) -> RecurringTask:
+        """Create a new recurring task template."""
+        difficulty_str = ValidationService.validate_and_convert_difficulty(difficulty)
+        
+        with get_db_session() as session:
+            active_season = SeasonService.get_active_season(session)
+            season_tz = ValidationService.validate_timezone(active_season.timezone_string)
+            now = datetime.now(season_tz)
+
+            new_recurring_task = RecurringTask(
+                task=task_description,
+                project=project,
+                difficulty=difficulty_str,
+                time_taken_minutes=duration,
+                frequency=frequency,
+                due_time=due_time,
+                is_active=True,
+                created_at=now,
+                season_id=active_season.id
+            )
+            session.add(new_recurring_task)
+            session.flush()
+            session.refresh(new_recurring_task)
+            session.expunge(new_recurring_task)
+            logger.info(f"Created recurring task: {task_description}")
+            return new_recurring_task
+
+    @staticmethod
+    def list_recurring_tasks() -> List[RecurringTask]:
+        """List all active recurring tasks for the current season."""
+        with get_db_session() as session:
+            active_season = SeasonService.get_active_season(session)
+            recurring_tasks = session.query(RecurringTask).filter(
+                RecurringTask.season_id == active_season.id,
+                RecurringTask.is_active == True
+            ).order_by(RecurringTask.id).all()
+            for rt in recurring_tasks:
+                session.expunge(rt)
+            return recurring_tasks
+
+    @staticmethod
+    def delete_recurring_task(recurring_task_id: int):
+        """Delete a recurring task template by its ID."""
+        with get_db_session() as session:
+            rt = session.query(RecurringTask).filter(RecurringTask.id == recurring_task_id).first()
+            if not rt:
+                raise RecurringTaskNotFoundError(recurring_task_id)
+            
+            session.delete(rt)
+            session.commit()
+            logger.info(f"Deleted recurring task: {rt.task} (ID: {recurring_task_id})")
+
+    @staticmethod
+    def generate_tasks_from_templates() -> int:
+        """Generate tasks for today from active recurring task templates.
+        
+        Returns:
+            int: The number of new tasks generated.
+        """
+        generated_count = 0
+        with get_db_session() as session:
+            try:
+                active_season = SeasonService.get_active_season(session)
+            except NoActiveSeasonError:
+                logger.info("No active season, skipping recurring task generation.")
+                return 0
+
+            season_tz = ValidationService.validate_timezone(active_season.timezone_string)
+            now = datetime.now(season_tz)
+            day_start_hour = active_season.day_start_hour
+
+            # Determine the date for which tasks should be generated
+            generation_date = now.date()
+            if now.time() < time(day_start_hour):
+                generation_date = (now - timedelta(days=1)).date()
+
+            day_start = datetime.combine(generation_date, time(day_start_hour), tzinfo=season_tz)
+            day_end = day_start + timedelta(days=1)
+
+            active_templates = session.query(RecurringTask).filter(
+                RecurringTask.season_id == active_season.id,
+                RecurringTask.is_active == True
+            ).all()
+
+            for template in active_templates:
+                # 1. Check if it should run today
+                should_run = False
+                freq = template.frequency.lower()
+                day_of_week_str = generation_date.strftime('%a')
+                weekday = generation_date.weekday()
+
+                if freq == 'daily':
+                    should_run = True
+                elif freq == 'weekdays' and weekday < 5:
+                    should_run = True
+                elif freq == 'weekends' and weekday >= 5:
+                    should_run = True
+                elif day_of_week_str in [d.strip() for d in freq.split(',')]:
+                    should_run = True
+
+                if not should_run:
+                    continue
+                
+                # 2. Construct the task description for matching and creation
+                task_desc = template.task
+                if template.due_time:
+                    task_desc += f" (due by {template.due_time})"
+
+                # 3. Check if a task with these properties has already been generated today
+                task_exists = session.query(Task).filter(
+                    Task.task == task_desc,
+                    Task.project == template.project,
+                    Task.season_id == active_season.id,
+                    Task.created_at >= day_start,
+                    Task.created_at < day_end
+                ).count() > 0
+
+                if task_exists:
+                    continue
+                
+                # 4. Create the task if needed
+                difficulty_int = DIFFICULTY_MAP_STR_TO_INT.get(template.difficulty) if template.difficulty else None
+
+                # If due_time provided, set deadline on same generation_date
+                deadline_str = None
+                if template.due_time:
+                    try:
+                        # Build local datetime string: YYYY-MM-DD HH:MM:SS
+                        deadline_local = datetime.combine(generation_date, time.fromisoformat(template.due_time))
+                        # Format to parse with timezone later in _create_task_with_session
+                        deadline_str = deadline_local.strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        deadline_str = None
+
+                TaskService._create_task_with_session(
+                    session=session,
+                    task_description=task_desc,
+                    project=template.project,
+                    difficulty=difficulty_int,
+                    duration=template.time_taken_minutes,
+                    deadline_str=deadline_str
+                )
+                logger.info(f"Generated task for recurring template ID {template.id}: '{template.task}'")
+                generated_count += 1
+        return generated_count
 
 
 class StatusService:
@@ -902,6 +1172,15 @@ class StatusService:
             net_total_lp = total_lp_gain - total_decay
             breakeven_lp_gain_required = max(0, daily_decay - net_total_lp)
 
+            # Recovery planning: per-day LP needed to return to net >= 0 over N days,
+            # accounting for ongoing daily decay.
+            recovery_horizons = [3, 5, 7, 14, 21]
+            current_deficit = max(0.0, -net_total_lp)
+            recovery_plan_per_day = {
+                n: active_season.daily_decay + (current_deficit / n if n > 0 else 0.0)
+                for n in recovery_horizons
+            }
+
             return {
                 'total_lp_gain': total_lp_gain,
                 'total_decay': total_decay,
@@ -915,6 +1194,8 @@ class StatusService:
                 'weekly_lp_total': weekly_lp_total if not df_completed.empty else 0.0,
                 'weekly_decay': weekly_decay if not df_completed.empty else 0.0,
                 'weekly_delta': weekly_delta if not df_completed.empty else 0.0
+                , 'recovery_plan_per_day': recovery_plan_per_day
+                , 'recovery_horizons': recovery_horizons
             }
 
     @staticmethod
@@ -930,40 +1211,123 @@ class StatusService:
         daily_lp_gain = status.get('daily_lp_gain', 0.0)
         time_until_next_decay = status.get('time_until_next_decay')
         breakeven_lp_gain_required = status.get('breakeven_lp_gain_required', 0.0)
+        recovery_plan_per_day = status.get('recovery_plan_per_day', {})
         lp_by_day = status.get('lp_by_day', {})
         weekly_lp_total = status.get('weekly_lp_total', 0.0)
         weekly_decay = status.get('weekly_decay', 0.0)
         weekly_delta = status.get('weekly_delta', 0.0)
 
-        status_str = f"Current Season: {season_name}\n"
+
+        # Season-level summary (aligned with weekly summary style)
+        status_str = "================================\n\n"
+        status_str += f"Current Season: {season_name}\n\n"
         if week != 0:
-            status_str += f"Viewing week offset: {week} (Mon-Sun)\n"
-        status_str += f"Total LP Gain: {total_lp_gain:.2f}\n"
-        status_str += f"Total Decay: {total_decay:.2f}\n"
-        status_str += f"Net Total LP: {net_total_lp:.2f}\n"
-        status_str += "--------------------\n"
-        
-        # Add LP by Day of Week
-        status_str += "LP by Day of Week:\n"
-        day_lp_parts = []
+            status_str += f"Viewing week offset: {week} (Mon-Sun)\n\n"
+        status_str += "Season Summary:\n"
+        status_str += f"LP Gain: {total_lp_gain:.2f}\n"
+        status_str += f"Decay: {total_decay:.2f}\n"
+        status_str += f"Net LP: {net_total_lp:.2f}\n\n"
+        status_str += "================================\n\n"
+        # Weekly summary (Mon-Sun) - LP per day and weekly totals
+        status_str += "Weekly Summary:\n"
         daily_decay = active_season.daily_decay
+        # Per-day lines for clarity
+        for day in ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']:
+            lp_val = lp_by_day.get(day, 0.0)
+            color_val = f"[bold red]{lp_val:.2f}[/bold red]" if lp_val < daily_decay else f"[bold green]{lp_val:.2f}[/bold green]"
+            status_str += f"  [cyan]{day}[/cyan]: {color_val}\n"
 
-        for day, lp in lp_by_day.items():
-            if lp < daily_decay:
-                day_lp_parts.append(f"[cyan]{day}[/cyan]: [bold red]{lp:.2f}[/bold red]")
-            else:
-                day_lp_parts.append(f"[cyan]{day}[/cyan]: [bold green]{lp:.2f}[/bold green]")
+        status_str += f"LP Gain: {weekly_lp_total:.2f}\n"
+        status_str += f"Decay: {weekly_decay:.2f}\n"
+        status_str += f"Net LP: {weekly_delta:.2f}\n\n"
         
-        status_str += " | ".join(day_lp_parts) + "\n"
-        status_str += "--------------------\n"
-        status_str += f"Selected Week LP Gain: {weekly_lp_total:.2f} | Decay: {weekly_decay:.2f} | Delta: {weekly_delta:.2f}\n"
+        status_str += "================================\n\n"
+        status_str += "Daily Summary:\n"
 
-        status_str += f"Today's LP Gain: {daily_lp_gain:.2f}\n"
-        
-        if time_until_next_decay:
-            status_str += f"Survival Delta: You need to gain {breakeven_lp_gain_required:.2f} LP in the next {StatusService.format_timedelta(time_until_next_decay)} to break even.\n"
-        else:
-            status_str += f"Survival Delta: You will survive the next decay. Next decay in {StatusService.format_timedelta(time_until_next_decay)}.\n"
+        status_str += f"LP Gain: {daily_lp_gain:.2f}\n"
+        status_str += f"Decay: {daily_decay:.2f}\n"
+        status_str += f"Net LP: {daily_lp_gain - daily_decay:.2f}\n\n"
+        status_str += "================================\n\n"
+
+        # Add recovery plan summary per horizon (each on its own line for clarity)
+        if recovery_plan_per_day:
+            status_str += f"Recovery Target Rates (Decay = -{daily_decay:.2f} LP/day)\n"
+            # Add 1-day target (survival for next decay) computed from the same deficit
+            try:
+                # Reconstruct current deficit from smallest available horizon
+                n0 = min(recovery_plan_per_day.keys())
+                current_deficit = (recovery_plan_per_day[n0] - daily_decay) * n0
+                one_day = daily_decay + current_deficit
+                status_str += f"  - 1 day: {one_day:.2f} LP/day\n"
+            except Exception:
+                # Fallback: do not show 1 day if computation fails
+                pass
+            for n in sorted(recovery_plan_per_day.keys()):
+                label = f"{n} day" + ("s" if n > 1 else "")
+                status_str += f"  - {label}: {recovery_plan_per_day[n]:.2f} LP/day\n"
+
+            status_str += "\n"
+            status_str += "================================\n\n"
+
+        # Recommended next tasks: prioritize Critical, then by nearest deadline
+        active_tasks = TaskService.get_active_tasks()
+        if active_tasks:
+            tz_display = gettz(active_season.timezone_string)
+            def imp_rank(val: Optional[str]) -> int:
+                return 0 if (val or "").lower() == "critical" else 1
+            def deadline_val(task_obj):
+                try:
+                    if getattr(task_obj, 'deadline', None):
+                        dl = task_obj.deadline
+                        if dl.tzinfo is None:
+                            # Assume season timezone for legacy naive timestamps
+                            dl = dl.replace(tzinfo=tz_display)
+                        # Sort using UTC to be consistent
+                        return dl.astimezone(timezone.utc)
+                    return datetime.max.replace(tzinfo=timezone.utc)
+                except Exception:
+                    return datetime.max.replace(tzinfo=timezone.utc)
+            scored = sorted(active_tasks, key=lambda t: (imp_rank(getattr(t, 'importance', None)), deadline_val(t)))
+            top3 = scored[:3]
+            if top3:
+                status_str += "Recommended Tasks by (Importance, Deadline)\n"
+                
+                # Create a Rich Table for recommendations
+                recommendation_table = Table(
+                    show_header=True, 
+                    header_style="bold magenta", 
+                    title_style="bold blue", # This won't be shown unless Table has a title
+                    highlight=True # Highlight rows on hover (if in a rich-enabled terminal)
+                )
+                recommendation_table.add_column("ID", style="cyan", width=4, no_wrap=True)
+                recommendation_table.add_column("Task", style="white", min_width=30, max_width=40) # Allow wrapping
+                recommendation_table.add_column("Importance", style="yellow", width=12, no_wrap=True)
+                recommendation_table.add_column("Deadline", style="green", width=16, no_wrap=True)
+
+                for t in top3:
+                    dl = 'N/A'
+                    if getattr(t, 'deadline', None):
+                        try:
+                            dl_local = t.deadline
+                            if dl_local.tzinfo is None:
+                                dl_local = dl_local.replace(tzinfo=tz_display)
+                            dl = dl_local.astimezone(tz_display).strftime('%Y-%m-%d %H:%M')
+                        except Exception:
+                            dl = 'N/A'
+                    imp = t.importance or 'Non-Critical'
+                    
+                    recommendation_table.add_row(
+                        str(t.id),
+                        t.task,
+                        imp,
+                        dl
+                    )
+                
+                # Render the table to a string
+                console = Console(file=io.StringIO(), record=True)
+                console.print(recommendation_table)
+                status_str += console.file.getvalue()
+                status_str += '\n' # Add an extra newline for spacing after the table
 
         return status_str
 
